@@ -27,6 +27,7 @@ Prefer 20 plain lines over one abstraction. Match the existing style (type hints
 - Env vars: `GEMINI_API_KEY`, `LLM_MODEL` (default `gemini/gemini-3.5-flash`),
   optional `LLM_DEEP_MODEL` (Research Manager + Portfolio Manager; defaults to `LLM_MODEL`).
 - Gemini free tier = ~20 requests/day PER MODEL. A run costs 8 + 2*DEBATE_ROUNDS calls (~2-4 min). `core/.env` uses `LLM_MODEL=gemini/gemini-3.1-flash-lite` (10 calls) + `LLM_DEEP_MODEL=gemini/gemini-3.5-flash` (2 calls) + `DEBATE_ROUNDS=1` => ~2 runs/day on lite, 10 on 3.5. `gemini-3.8-flash` hung once; check model names with the ListModels REST call, they change often.
+- Groq free tier (alternative, see `.env.example`): per model 8K tokens/min and 200K tokens/day; a full analysis is ~57K tokens (~8 min with `LLM_TPM=7000`), so ~3 runs/day/model. `qwen3.8-27b` also has an output-tokens/min cap and failed; use the gpt-oss models.
 - Data: yfinance for prices, fundamentals, news (required). Reddit / StockTwits / FRED / Polymarket are optional extras:
   any failure must degrade to a "no data" string, never crash a run, and must not block for more than ~10s.
 - Rust: `tui/` (`cargo run` from there). Backend on `http://127.0.0.1:8000`.
