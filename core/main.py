@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime
 import json
 import logging
 import os
@@ -28,22 +29,20 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """Start tracing, and (ENABLE_SCHEDULER=1) the weekday daily run plus a 5-minute portfolio gauge refresh."""
+    """Start tracing and a 5-minute portfolio gauge refresh; ENABLE_SCHEDULER=1 adds the weekday 16:30 ET daily run."""
     obs.init_tracing()
-    sched = None
-    if os.environ.get("ENABLE_SCHEDULER") == "1":
-        from apscheduler.schedulers.background import BackgroundScheduler
-        from trading.daily_run import refresh_gauges, run_daily
+    from apscheduler.schedulers.background import BackgroundScheduler
+    from trading.daily_run import refresh_gauges, run_daily
 
+    sched = BackgroundScheduler(timezone="America/New_York")
+    sched.add_job(refresh_gauges, "interval", minutes=5, id="gauges", next_run_time=datetime.now(sched.timezone))
+    if os.environ.get("ENABLE_SCHEDULER") == "1":
         execute = os.environ.get("SCHEDULER_EXECUTE") == "1"
-        sched = BackgroundScheduler(timezone="America/New_York")
         sched.add_job(lambda: run_daily(execute=execute), "cron", day_of_week="mon-fri", hour=16, minute=30, id="daily", misfire_grace_time=3600)
-        sched.add_job(refresh_gauges, "interval", minutes=5, id="gauges")
-        sched.start()
         logger.info("scheduler on: daily run weekdays 16:30 ET (%s)", "EXECUTE" if execute else "dry run")
+    sched.start()
     yield
-    if sched:
-        sched.shutdown(wait=False)
+    sched.shutdown(wait=False)
     obs.shutdown()
 
 app = FastAPI(title="Trading Agents API - Raw Data Explorer", lifespan=lifespan)

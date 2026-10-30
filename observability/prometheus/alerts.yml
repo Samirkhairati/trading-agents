@@ -1,0 +1,53 @@
+groups:
+  - name: trading
+    rules:
+      - alert: BackendDown
+        expr: up{job="trading-agents"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Trading backend is down
+          description: Prometheus cannot scrape host.docker.internal:8000/metrics for 2 minutes.
+
+      - alert: DailyRunStale
+        expr: (time() - daily_run_last_success_timestamp_seconds) > 3 * 86400 and daily_run_last_success_timestamp_seconds > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: No successful daily run for 3+ days
+          description: The last successful daily run was {{ $value | humanizeDuration }} ago.
+
+      - alert: DailyRunFailing
+        expr: increase(daily_run_total{status="error"}[1d]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: Daily run failed in the last 24h
+          description: "{{ $value | printf \"%.0f\" }} daily run error(s) in the last day."
+
+      - alert: DrawdownNearHalt
+        expr: portfolio_drawdown_pct >= 8
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Drawdown close to the 10% buy halt
+          description: Portfolio drawdown is {{ $value | printf "%.1f" }}% (new buys halt at 10%).
+
+      - alert: LlmRateLimited
+        expr: increase(llm_rate_limit_hits_total[30m]) > 10
+        labels:
+          severity: warning
+        annotations:
+          summary: LLM provider rate limiting
+          description: "{{ $labels.model }} hit the rate limit {{ $value | printf \"%.0f\" }} times in 30 minutes."
+
+      - alert: BrokerErrors
+        expr: increase(broker_errors_total[1h]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: Broker errors in the last hour
+          description: "{{ $value | printf \"%.0f\" }} broker error(s) in the last hour."
