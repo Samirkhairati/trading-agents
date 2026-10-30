@@ -1,0 +1,14 @@
+fastapi[standard]
+uvicorn
+pydantic
+litellm
+instructor
+langgraph
+yfinance
+pandas
+stockstats
+openai
+python-dotenv
+pytest
+alpaca-py
+apscheduler
