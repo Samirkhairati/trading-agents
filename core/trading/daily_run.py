@@ -8,6 +8,7 @@ import argparse
 import json
 import logging
 import os
+import time
 from dataclasses import asdict
 from datetime import date, datetime
 from pathlib import Path
@@ -17,12 +18,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import observability as obs
 from trading import state as st
 from trading.broker import AlpacaBroker, Broker, FakeBroker
 from trading.planner import PortfolioAgent, build_context, intents_to_orders
-from trading.risk import check_orders
+from trading.risk import check_orders, drawdown_pct
 from trading.screener import pick_candidates, score_watchlist
-from trading.types import RiskConfig
+from trading.types import Account, Position, RiskConfig
 
 logger = logging.getLogger(__name__)
 WATCHLIST = Path(__file__).resolve().parent.parent / "watchlist.json"
@@ -46,7 +48,7 @@ def _prices(broker: Broker, symbols: List[str]) -> Dict[str, float]:
             logger.warning("no price for %s: %s", s, e)
     return out
 
-def run_daily(
+def _run_daily(
     broker: Optional[Broker] = None,
     execute: bool = False,
     tickers: Optional[List[str]] = None,
@@ -94,6 +96,10 @@ def run_daily(
     plan = plan_fn(build_context(account, positions, decisions, _recent_trades())) if decisions or positions else None
     orders = intents_to_orders(plan, account, positions, prices) if plan else []
     approved, rejected = check_orders(orders, account, positions, cfg, state["peak_equity"])
+    obs.ORDERS.labels("approved").inc(len(approved))
+    obs.ORDERS.labels("rejected").inc(len(rejected))
+    for r in rejected:
+        obs.ORDERS_REJECTED.labels(r.reason.split(":")[0].strip() or "unknown").inc()
     for o in approved:
         log(f"  APPROVE {o.side.upper():4} {o.symbol} ${o.notional:,.0f} stop {o.stop_loss} take {o.take_profit} | {o.reason}")
     for r in rejected:
@@ -105,7 +111,10 @@ def run_daily(
         for o in approved:
             try:
                 fills.append({"symbol": o.symbol, "side": o.side, "order_id": broker.place_order(o)})
+                obs.ORDERS.labels("executed").inc()
             except Exception as e:
+                obs.ORDERS.labels("failed").inc()
+                obs.BROKER_ERRORS.inc()
                 fills.append({"symbol": o.symbol, "side": o.side, "error": str(e).splitlines()[0]})
         log(f"Placed {len([f for f in fills if 'order_id' in f])}/{len(approved)} orders")
 
@@ -113,12 +122,50 @@ def run_daily(
     final = broker.get_account()
     st.record_equity(state, final.equity, final.cash)
     st.save_state(state)
+    publish_portfolio(final, broker.get_positions(), state["peak_equity"])
     record = {
         "time": datetime.now().isoformat(timespec="seconds"), "executed": execute, "equity": final.equity, "cash": final.cash,
         "candidates": tickers, "decisions": decisions, "errors": errors, "summary": plan.summary if plan else "",
         "approved": [asdict(o) for o in approved], "rejected": [{**asdict(r.order), "reason": r.reason} for r in rejected], "fills": fills,
     }
     st.log_run(record)
+    return record
+
+def publish_portfolio(account: Account, positions: List[Position], peak_equity: float) -> None:
+    """Refresh the portfolio gauges Prometheus scrapes."""
+    obs.EQUITY.set(account.equity)
+    obs.CASH.set(account.cash)
+    obs.PEAK.set(peak_equity)
+    obs.DRAWDOWN.set(drawdown_pct(account.equity, peak_equity))
+    obs.POSITIONS.set(len(positions))
+
+def refresh_gauges() -> None:
+    """Update the portfolio gauges from the real paper account (skipped without Alpaca keys, a fake $100k would mislead)."""
+    if not (os.getenv("ALPACA_API_KEY") and os.getenv("ALPACA_SECRET_KEY")):
+        return
+    try:
+        broker = make_broker()
+        account = broker.get_account()
+        peak = max(st.load_state()["peak_equity"] or 0.0, account.equity)
+        publish_portfolio(account, broker.get_positions(), peak)
+    except Exception as e:
+        obs.BROKER_ERRORS.inc()
+        logger.warning("portfolio gauge refresh failed: %s", e)
+
+def run_daily(*args, **kwargs) -> Dict[str, Any]:
+    """Run one cycle with metrics and a trace around it (see _run_daily for the arguments)."""
+    start = time.monotonic()
+    with obs.span("daily_run", kind="span") as root:
+        obs.tag_trace(root, "daily run", execute=bool(kwargs.get("execute")))
+        try:
+            record = _run_daily(*args, **kwargs)
+        except Exception:
+            obs.DAILY_RUNS.labels("error").inc()
+            raise
+        finally:
+            obs.DAILY_SECONDS.observe(time.monotonic() - start)
+    obs.DAILY_RUNS.labels("ok").inc()
+    obs.DAILY_LAST_OK.set_to_current_time()
     return record
 
 def _recent_trades(k: int = 3) -> str:
@@ -136,6 +183,7 @@ def main() -> None:
     ap.add_argument("-n", type=int, default=3, help="new candidates from the watchlist")
     args = ap.parse_args()
     logging.basicConfig(level=logging.WARNING)
+    obs.init_tracing()
 
     job = lambda: run_daily(execute=args.execute, tickers=args.tickers, n=args.n)
     if args.schedule:
@@ -145,7 +193,10 @@ def main() -> None:
         print("Scheduled weekdays 16:30 America/New_York. Ctrl+C to stop.")
         sched.start()
     else:
-        job()
+        try:
+            job()
+        finally:
+            obs.shutdown()
 
 if __name__ == "__main__":
     main()

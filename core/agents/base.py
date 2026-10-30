@@ -4,6 +4,7 @@ import threading
 import time
 from collections import deque
 import instructor
+import observability as obs
 from litellm import completion
 from pydantic import BaseModel
 from typing import Type, TypeVar, Optional
@@ -111,25 +112,52 @@ class BaseAgent:
             {"role": "system", "content": self.role_prompt},
             {"role": "user", "content": data_context}
         ]
-        
-        # conservative estimate: prompt chars/2.5 plus room for reasoning + the structured reply
-        slot = _wait_for_tokens(self.model, int(sum(len(m["content"]) for m in messages) / 2.5) + 1500)
-        for attempt in range(8):
-            _throttle()
+        with obs.span(f"llm.{type(self).__name__}", kind="generation") as sp:
             try:
-                response, raw = self._create(messages, response_format)
-                break
-            except Exception as e:  # instructor wraps litellm errors, so match on the text
-                if "tool_use_failed" in str(e) and attempt < 2:
-                    continue  # the provider rejected a malformed tool call; just ask again
-                if "RateLimitError" not in str(e):
-                    raise
-                # per-minute caps clear quickly: wait the time the provider suggests
-                m = re.search(r"try again in (?:(\d+)m)?([\d.]+)s", str(e))
-                wait = int(m.group(1) or 0) * 60 + float(m.group(2)) + 1 if m else 0
-                if attempt == 7 or not m or wait > 90:  # long waits mean a daily cap: fail fast
-                    raise
-                time.sleep(wait)
+                response, raw, slot = self._call_with_retries(messages, response_format)
+            except Exception:
+                obs.LLM_CALLS.labels(self.model, "error").inc()
+                raise
+            usage_ = getattr(raw, "usage", None)
+            total = getattr(usage_, "total_tokens", 0) or 0
+            obs.LLM_CALLS.labels(self.model, "ok").inc()
+            obs.LLM_TOKENS.labels(self.model).inc(total)
+            obs.record_generation(sp, self.model, messages, response, getattr(usage_, "prompt_tokens", 0), getattr(usage_, "completion_tokens", 0))
+            _record_tokens(slot, total)
+            return response
 
-        _record_tokens(slot, getattr(raw.usage, "total_tokens", 0) or 0)
-        return response
+    def _call_with_retries(self, messages: list, response_format: Type[T]):
+        waited = 0.0  # time spent blocked on the throttle or provider retry sleeps (not model latency)
+
+        def blocked(fn, *a):
+            nonlocal waited
+            t = time.monotonic()
+            try:
+                return fn(*a)
+            finally:
+                waited += time.monotonic() - t
+
+        # conservative estimate: prompt chars/2.5 plus room for reasoning + the structured reply
+        slot = blocked(_wait_for_tokens, self.model, int(sum(len(m["content"]) for m in messages) / 2.5) + 1500)
+        start = time.monotonic()
+        try:
+            for attempt in range(8):
+                blocked(_throttle)
+                try:
+                    response, raw = self._create(messages, response_format)
+                    return response, raw, slot
+                except Exception as e:  # instructor wraps litellm errors, so match on the text
+                    if "tool_use_failed" in str(e) and attempt < 2:
+                        continue  # the provider rejected a malformed tool call; just ask again
+                    if "RateLimitError" not in str(e):
+                        raise
+                    obs.LLM_RATE_LIMITS.labels(self.model).inc()
+                    # per-minute caps clear quickly: wait the time the provider suggests
+                    m = re.search(r"try again in (?:(\d+)m)?([\d.]+)s", str(e))
+                    wait = int(m.group(1) or 0) * 60 + float(m.group(2)) + 1 if m else 0
+                    if attempt == 7 or not m or wait > 90:  # long waits mean a daily cap: fail fast
+                        raise
+                    blocked(time.sleep, wait)
+        finally:
+            obs.LLM_WAIT.labels(self.model).inc(waited)
+            obs.LLM_SECONDS.labels(self.model).observe(max(time.monotonic() - start - waited, 0))

@@ -1,14 +1,17 @@
 import asyncio
 import json
 import logging
+import os
 from concurrent.futures import ThreadPoolExecutor
 import uuid
 from typing import Optional
 from dotenv import load_dotenv
-from fastapi import FastAPI, BackgroundTasks, HTTPException
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, BackgroundTasks, HTTPException, Response
 
 load_dotenv()
 import memory
+import observability as obs
 from pydantic import BaseModel
 from typing import Dict, Any
 
@@ -23,7 +26,33 @@ from data.alternative_fetchers import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Trading Agents API - Raw Data Explorer")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Start tracing, and (ENABLE_SCHEDULER=1) the weekday daily run plus a 5-minute portfolio gauge refresh."""
+    obs.init_tracing()
+    sched = None
+    if os.environ.get("ENABLE_SCHEDULER") == "1":
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from trading.daily_run import refresh_gauges, run_daily
+
+        execute = os.environ.get("SCHEDULER_EXECUTE") == "1"
+        sched = BackgroundScheduler(timezone="America/New_York")
+        sched.add_job(lambda: run_daily(execute=execute), "cron", day_of_week="mon-fri", hour=16, minute=30, id="daily", misfire_grace_time=3600)
+        sched.add_job(refresh_gauges, "interval", minutes=5, id="gauges")
+        sched.start()
+        logger.info("scheduler on: daily run weekdays 16:30 ET (%s)", "EXECUTE" if execute else "dry run")
+    yield
+    if sched:
+        sched.shutdown(wait=False)
+    obs.shutdown()
+
+app = FastAPI(title="Trading Agents API - Raw Data Explorer", lifespan=lifespan)
+
+@app.get("/metrics")
+async def metrics():
+    """Prometheus scrape endpoint."""
+    body, content_type = obs.render_metrics()
+    return Response(body, media_type=content_type)
 
 # ----------------------------------------------------------------------
 # MICRO-ENDPOINTS FOR CONCURRENT LOADING (Phase 4)

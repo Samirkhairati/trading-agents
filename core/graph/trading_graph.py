@@ -7,6 +7,7 @@ from typing import Any, Callable, Dict, Optional
 from langgraph.graph import END, START, StateGraph
 
 import memory
+import observability as obs
 from agents.debate import DebateAgent
 from agents.fundamental import FundamentalAnalyst
 from agents.manager import PortfolioManager
@@ -144,16 +145,16 @@ def portfolio_manager_node(state: AgentState) -> dict:
 def build_graph():
     g = StateGraph(AgentState)
     for name, fn in zip(ANALYSTS, [fundamental_node, technical_node, sentiment_node, news_node]):
-        g.add_node(name, fn)
+        g.add_node(name, obs.traced_node(name, fn))
         g.add_edge(START, name)  # analysts run in parallel
-    g.add_node("Bull Researcher", _debate_node("Bull"))
-    g.add_node("Bear Researcher", _debate_node("Bear"))
-    g.add_node("Research Manager", research_manager_node)
-    g.add_node("Trader", trader_node)
-    g.add_node("Aggressive Analyst", _risk_node("Aggressive"))
-    g.add_node("Conservative Analyst", _risk_node("Conservative"))
-    g.add_node("Neutral Analyst", _risk_node("Neutral"))
-    g.add_node("Portfolio Manager", portfolio_manager_node)
+    g.add_node("Bull Researcher", obs.traced_node("Bull Researcher", _debate_node("Bull")))
+    g.add_node("Bear Researcher", obs.traced_node("Bear Researcher", _debate_node("Bear")))
+    g.add_node("Research Manager", obs.traced_node("Research Manager", research_manager_node))
+    g.add_node("Trader", obs.traced_node("Trader", trader_node))
+    g.add_node("Aggressive Analyst", obs.traced_node("Aggressive Analyst", _risk_node("Aggressive")))
+    g.add_node("Conservative Analyst", obs.traced_node("Conservative Analyst", _risk_node("Conservative")))
+    g.add_node("Neutral Analyst", obs.traced_node("Neutral Analyst", _risk_node("Neutral")))
+    g.add_node("Portfolio Manager", obs.traced_node("Portfolio Manager", portfolio_manager_node))
 
     g.add_edge(ANALYSTS, "Bull Researcher")  # join: wait for all analysts
     for n in ("Bull Researcher", "Bear Researcher"):
@@ -180,13 +181,20 @@ def run_analysis(
     state["past_context"] = memory.get_past_context(ticker, last_price)
 
     done = 0
-    for update in build_graph().stream(state, stream_mode="updates"):
-        for node, delta in update.items():
-            state.update(delta or {})
-            done += 1
-            if on_progress:
-                on_progress(node, done, TOTAL_STAGES)
-
-    memory.save_decision(ticker, state["final_decision"], last_price)
+    with obs.span("analysis", kind="span", ticker=ticker) as root:
+        obs.tag_trace(root, f"analysis {ticker}", ticker=ticker, trade_date=state["trade_date"])
+        try:
+            for update in build_graph().stream(state, stream_mode="updates"):
+                for node, delta in update.items():
+                    state.update(delta or {})
+                    done += 1
+                    if on_progress:
+                        on_progress(node, done, TOTAL_STAGES)
+            memory.save_decision(ticker, state["final_decision"], last_price)
+        except Exception:
+            obs.ANALYSIS_RUNS.labels("error").inc()
+            raise
+        obs.ANALYSIS_RUNS.labels("ok").inc()
+        root.set_attribute("langfuse.trace.output", json.dumps(state["final_decision"], default=str))
     state["last_price"] = last_price
     return state

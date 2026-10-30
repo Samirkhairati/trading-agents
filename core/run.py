@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import observability as obs
 from graph.trading_graph import run_analysis
 
 def main() -> int:
@@ -13,6 +14,7 @@ def main() -> int:
         print("usage: python run.py TICKER")
         return 2
     start = time.time()
+    obs.init_tracing()
     try:
         state = run_analysis(
             sys.argv[1],
@@ -30,4 +32,6 @@ def main() -> int:
     return 0
 
 if __name__ == "__main__":
-    sys.exit(main())
+    code = main()
+    obs.shutdown()
+    sys.exit(code)

@@ -12,3 +12,6 @@ python-dotenv
 pytest
 alpaca-py
 apscheduler
+prometheus-client
+opentelemetry-sdk
+opentelemetry-exporter-otlp-proto-http
