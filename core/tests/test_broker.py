@@ -112,7 +112,7 @@ def test_alpaca_bracket_order_request(alpaca):
     assert oid == "abc-123"
     req = b.trading_client.submit_order.call_args.args[0]
     assert req.symbol == "AAPL" and req.qty == 6 and req.notional is None  # floor(1000 / 150)
-    assert req.side == OrderSide.BUY and req.time_in_force == TimeInForce.DAY
+    assert req.side == OrderSide.BUY and req.time_in_force == TimeInForce.GTC  # legs must outlive the day
     assert req.order_class == OrderClass.BRACKET
     assert req.stop_loss.stop_price == 140.13
     assert req.take_profit.limit_price == 171.0
@@ -138,6 +138,17 @@ def test_alpaca_sell_closes_position(alpaca):
     b.trading_client.close_position.return_value = SimpleNamespace(id="c-1")
     assert b.place_order(ProposedOrder(symbol="AAPL", side="sell")) == "c-1"
     b.trading_client.close_position.assert_called_once_with("AAPL")
+
+
+def test_alpaca_close_cancels_open_legs_first(alpaca):
+    b, _, _ = alpaca
+    tc = b.trading_client
+    tc.get_orders.return_value = [SimpleNamespace(id="leg-1"), SimpleNamespace(id="leg-2")]
+    tc.cancel_order_by_id.side_effect = [None, RuntimeError("already cancelled")]  # a failed cancel must not abort
+    tc.close_position.return_value = SimpleNamespace(id="c-2")
+    assert b.close_position("AAPL") == "c-2"
+    assert [c.args[0] for c in tc.cancel_order_by_id.call_args_list] == ["leg-1", "leg-2"]
+    assert tc.get_orders.call_args.args[0].symbols == ["AAPL"]
 
 
 def test_alpaca_account_positions_clock(alpaca):

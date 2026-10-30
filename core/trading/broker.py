@@ -7,8 +7,8 @@ from typing import Optional, Protocol
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockLatestTradeRequest
 from alpaca.trading.client import TradingClient
-from alpaca.trading.enums import OrderClass, OrderSide, TimeInForce
-from alpaca.trading.requests import MarketOrderRequest, StopLossRequest, TakeProfitRequest
+from alpaca.trading.enums import OrderClass, OrderSide, QueryOrderStatus, TimeInForce
+from alpaca.trading.requests import GetOrdersRequest, MarketOrderRequest, StopLossRequest, TakeProfitRequest
 
 from trading.types import Account, Position, ProposedOrder
 
@@ -113,7 +113,8 @@ class AlpacaBroker:
                 )
             both = order.stop_loss is not None and order.take_profit is not None
             req = MarketOrderRequest(
-                symbol=order.symbol, qty=qty, side=OrderSide.BUY, time_in_force=TimeInForce.DAY,
+                # GTC so the stop/take legs outlive the day the order was placed
+                symbol=order.symbol, qty=qty, side=OrderSide.BUY, time_in_force=TimeInForce.GTC,
                 order_class=OrderClass.BRACKET if both else OrderClass.OTO,
                 take_profit=TakeProfitRequest(limit_price=round(order.take_profit, 2)) if order.take_profit is not None else None,
                 stop_loss=StopLossRequest(stop_price=round(order.stop_loss, 2)) if order.stop_loss is not None else None,
@@ -121,6 +122,12 @@ class AlpacaBroker:
         return str(self.trading_client.submit_order(req).id)
 
     def close_position(self, symbol: str) -> str:
+        # open stop/take legs reserve the shares, so Alpaca refuses to close until they are cancelled
+        for o in self.trading_client.get_orders(GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[symbol])):
+            try:
+                self.trading_client.cancel_order_by_id(o.id)
+            except Exception:
+                pass  # a sibling leg may already be cancelled
         return str(self.trading_client.close_position(symbol).id)
 
 
