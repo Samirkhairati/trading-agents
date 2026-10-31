@@ -62,7 +62,7 @@ def init_tracing() -> bool:
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-        host = os.environ.get("LANGFUSE_HOST", "http://localhost:3000").rstrip("/")
+        host = (os.environ.get("LANGFUSE_BASE_URL") or os.environ.get("LANGFUSE_HOST") or "http://localhost:3000").rstrip("/")
         auth = base64.b64encode(f"{public}:{secret}".encode()).decode()
         exporter = OTLPSpanExporter(
             endpoint=f"{host}/api/public/otel/v1/traces",
