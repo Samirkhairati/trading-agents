@@ -1,6 +1,9 @@
 # trading-agents
 
-A small, runnable model of [TradingAgents](TradingAgents/): a team of LLM agents analyses a stock, and a paper-trading portfolio manager acts on the result. **The LLM proposes; plain Python decides.** Paper trading only. Not financial advice.
+<img width="1436" height="1034" alt="image" src="https://github.com/user-attachments/assets/837709e7-3586-4473-ad05-814352e4408c" />
+<img width="2173" height="1200" alt="image" src="https://github.com/user-attachments/assets/715fcf34-35f6-4d36-967f-2551d6382538" />
+
+A team of LLM agents analyses a stock, and a paper-trading portfolio manager acts on the result. **The LLM proposes; plain Python decides.** Paper trading only. Not financial advice.
 
 ## How it works
 
