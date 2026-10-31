@@ -183,8 +183,8 @@ rejections, key to trigger a dry-run and one to trigger an execute run (confirma
 - README section: set paper keys, run dry-run, run schedule, read the report. Explicit note: paper results over weeks prove little; not financial advice.
 
 ## Observability (done)
-`core/observability.py`: Prometheus metrics (`/metrics`) + OpenTelemetry spans to self-hosted Langfuse (off unless `LANGFUSE_*` keys are set).
-`observability/` is an opt-in Docker Compose stack (Langfuse :3000, Prometheus :9090, Grafana :3001, alerts in `prometheus/alerts.yml`);
+`core/observability.py`: Prometheus metrics (`/metrics`) + OpenTelemetry spans to Langfuse Cloud (off unless `LANGFUSE_*` keys are set).
+`observability/` is an opt-in Docker Compose stack for metrics only (Prometheus :9090, Grafana :3001, alerts in `prometheus/alerts.yml`);
 metric names are a contract between `observability.py` and the dashboard/alerts, change both together. The API refreshes portfolio gauges
 every 5 min; `ENABLE_SCHEDULER=1` also runs the weekday daily cycle in-process. Never put prompts/keys in span attributes beyond `record_generation`.
 

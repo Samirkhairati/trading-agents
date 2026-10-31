@@ -32,7 +32,7 @@ Paper results over a few weeks prove little. Not financial advice.
 Free Gemini tier is limited (about 5 requests/minute, ~20/day per model): `LLM_RPM=5` throttles calls; a run costs ~10 calls per ticker.
 
 ## Observability (optional)
-`cd observability && docker compose up -d` starts Langfuse (traces, http://localhost:3000), Prometheus (:9090) and Grafana (dashboard, http://localhost:3001). Logins and details: `observability/README.md`.
-- Traces: set `LANGFUSE_HOST`/`LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` in `core/.env` (defaults in `.env.example`); each analysis becomes a trace with a span per agent and every prompt/reply. `TRACE_CONTENT=0` hides the text.
+Traces go to Langfuse Cloud (free tier). `cd observability && docker compose up -d` starts Prometheus (:9090) and Grafana (dashboard, http://localhost:3001) for metrics. Details: `observability/README.md`.
+- Traces: set `LANGFUSE_BASE_URL`/`LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` in `core/.env` (defaults in `.env.example`); each analysis becomes a trace with a span per agent and every prompt/reply. `TRACE_CONTENT=0` hides the text.
 - Metrics: the API serves `/metrics` (LLM calls, tokens, rate limits, node timings, portfolio, orders). Alerts are defined in `observability/prometheus/alerts.yml`.
 - Unattended daily run: `ENABLE_SCHEDULER=1 ./start.sh` runs the weekday 16:30 ET cycle inside the API (dry run unless `SCHEDULER_EXECUTE=1`) so Prometheus always has a live target.
