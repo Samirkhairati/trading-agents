@@ -1,4 +1,4 @@
-# SimpleTradingAgents
+# trading-agents
 
 A small, runnable model of [TradingAgents](TradingAgents/): a team of LLM agents analyses a stock, and a paper-trading portfolio manager acts on the result. **The LLM proposes; plain Python decides.** Paper trading only. Not financial advice.
 

@@ -1,4 +1,4 @@
-# SimpleTradingAgents
+# trading-agents
 
 A small, runnable model of [TradingAgents](TradingAgents/) (the reference repo; read-only, git-ignored, never edit).
 Same idea, far less machinery: a team of LLM agents analyses one stock and a Portfolio Manager issues a rating.
