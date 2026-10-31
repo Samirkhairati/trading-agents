@@ -1,9 +1,12 @@
 # trading-agents
 
+Four analysts (fundamental, technical, sentiment, news) study a stock, bull and bear researchers debate it, a trader and a three-way risk panel refine the plan, and a portfolio manager issues a Buy to Sell rating. An autonomous loop then screens a watchlist, sizes positions and sends orders to an Alpaca **paper** account, with a Rust terminal UI, Prometheus/Grafana metrics and Langfuse traces.
+
+**The LLM proposes; plain Python decides:** a rule-based risk gate can veto any order, and the LLM cannot override it. Paper trading only. Not financial advice.
 <img width="1436" height="1034" alt="image" src="https://github.com/user-attachments/assets/837709e7-3586-4473-ad05-814352e4408c" />
 <img width="2173" height="1200" alt="image" src="https://github.com/user-attachments/assets/715fcf34-35f6-4d36-967f-2551d6382538" />
 
-A team of LLM agents analyses a stock, and a paper-trading portfolio manager acts on the result. **The LLM proposes; plain Python decides.** Paper trading only. Not financial advice.
+
 
 ## How it works
 
