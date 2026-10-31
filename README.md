@@ -107,6 +107,8 @@ Copy `core/.env.example` to `core/.env` and add `GEMINI_API_KEY` (or Groq), plus
 ./start.sh                                   # everything in Docker + the TUI; stops all on quit
 docker compose up -d --build                 # background stack only
 docker compose exec tui tui                  # open the TUI (the tui container is part of the stack)
+
+# other features
 docker compose run --rm api python run.py AAPL                              # analyse one stock
 docker compose run --rm api python -m trading.daily_run --tickers AAPL      # dry run
 docker compose run --rm api python -m trading.daily_run --tickers AAPL --execute   # sends PAPER orders
