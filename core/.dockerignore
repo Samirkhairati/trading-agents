@@ -1,0 +1,9 @@
+venv/
+.env
+.env.*
+!.env.example
+data/*.json
+__pycache__/
+.pytest_cache/
+*.log
+tests/

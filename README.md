@@ -8,10 +8,16 @@ cd core && python3.11 -m venv venv && venv/bin/pip install -r requirements.txt
 cp .env.example .env   # add GEMINI_API_KEY
 ```
 
-## Run
-- CLI: `cd core && venv/bin/python run.py AAPL`
-- API + TUI: `./start.sh` (needs `cargo`)
-- Smoke test one agent: `cd core && venv/bin/python test.py AAPL`
+## Run (Docker, no Python or Rust needed)
+Put your keys in `core/.env` (copy `core/.env.example`), then:
+- Everything + TUI: `./start.sh` (builds, starts API + Prometheus + Grafana, opens the TUI, stops all on quit)
+- Background stack only: `docker compose up -d --build` (API http://localhost:8000, Grafana http://localhost:3001, Prometheus http://localhost:9090)
+- TUI against a running stack: `docker compose run --rm tui`
+- Analyse one stock: `docker compose run --rm api python run.py AAPL`
+- Paper-trading dry run: `docker compose run --rm api python -m trading.daily_run --tickers AAPL`
+- Daily cycle on a schedule inside the API: `ENABLE_SCHEDULER=1 docker compose up -d` (dry run unless `SCHEDULER_EXECUTE=1`)
+
+Without Docker: `cd core && venv/bin/python run.py AAPL`, or `cargo run` in `tui/` with the API on 127.0.0.1:8000 (`API_URL` overrides the address).
 
 ## Test (no network, no API key)
 `cd core && venv/bin/python -m pytest -q`
@@ -32,7 +38,7 @@ Paper results over a few weeks prove little. Not financial advice.
 Free Gemini tier is limited (about 5 requests/minute, ~20/day per model): `LLM_RPM=5` throttles calls; a run costs ~10 calls per ticker.
 
 ## Observability (optional)
-Traces go to Langfuse Cloud (free tier). `cd observability && docker compose up -d` starts Prometheus (:9090) and Grafana (dashboard, http://localhost:3001) for metrics. Details: `observability/README.md`.
+Traces go to Langfuse Cloud (free tier). The compose stack includes Prometheus (:9090) and Grafana (dashboard, http://localhost:3001) for metrics. Details: `observability/README.md`.
 - Traces: set `LANGFUSE_BASE_URL`/`LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` in `core/.env` (defaults in `.env.example`); each analysis becomes a trace with a span per agent and every prompt/reply. `TRACE_CONTENT=0` hides the text.
 - Metrics: the API serves `/metrics` (LLM calls, tokens, rate limits, node timings, portfolio, orders). Alerts are defined in `observability/prometheus/alerts.yml`.
 - Unattended daily run: `ENABLE_SCHEDULER=1 ./start.sh` runs the weekday 16:30 ET cycle inside the API (dry run unless `SCHEDULER_EXECUTE=1`) so Prometheus always has a live target.

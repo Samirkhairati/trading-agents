@@ -14,7 +14,6 @@ use serde_json::Value;
 use std::time::Duration;
 use tokio::{sync::mpsc::UnboundedSender, task::JoinHandle};
 
-const BASE: &str = "http://127.0.0.1:8000";
 
 const TABS: [&str; 7] = [
     "1 Fundamentals",
@@ -140,7 +139,7 @@ fn str_of(v: &Value, key: &str) -> String {
 
 fn net_err(e: &reqwest::Error) -> String {
     if e.is_connect() || e.is_timeout() {
-        format!("Backend not reachable at {BASE}. Is the server running? ({e})")
+        format!("Backend not reachable at {}. Is the server running? ({e})", crate::api_base())
     } else {
         format!("Request failed: {e}")
     }
@@ -161,7 +160,7 @@ async fn job_task(client: Client, tx: UnboundedSender<DataMsg>, id: u64, ticker:
         let _ = tx.send(DataMsg::Analyze(id, m));
     };
     let resp = client
-        .post(format!("{BASE}/api/analyze"))
+        .post(format!("{}/api/analyze", crate::api_base()))
         .json(&serde_json::json!({ "ticker": ticker }))
         .send()
         .await;
@@ -179,7 +178,7 @@ async fn job_task(client: Client, tx: UnboundedSender<DataMsg>, id: u64, ticker:
 
     loop {
         tokio::time::sleep(Duration::from_secs(1)).await;
-        let st = match client.get(format!("{BASE}/api/status/{job_id}")).send().await {
+        let st = match client.get(format!("{}/api/status/{job_id}", crate::api_base())).send().await {
             Err(e) => return send(AnalyzeMsg::Failed(net_err(&e))),
             Ok(r) if !r.status().is_success() => return send(AnalyzeMsg::Failed(http_err(r).await)),
             Ok(r) => match r.json::<Value>().await {
@@ -190,7 +189,7 @@ async fn job_task(client: Client, tx: UnboundedSender<DataMsg>, id: u64, ticker:
         match st["state"].as_str().unwrap_or("") {
             "done" => {
                 send(AnalyzeMsg::Status(st));
-                let res = match client.get(format!("{BASE}/api/result/{job_id}")).send().await {
+                let res = match client.get(format!("{}/api/result/{job_id}", crate::api_base())).send().await {
                     Err(e) => return send(AnalyzeMsg::Failed(net_err(&e))),
                     Ok(r) if !r.status().is_success() => return send(AnalyzeMsg::Failed(http_err(r).await)),
                     Ok(r) => r.json::<Value>().await,

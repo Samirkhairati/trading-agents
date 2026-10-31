@@ -21,6 +21,11 @@ use std::{error::Error, io, time::Duration};
 use serde_json::Value;
 use tokio::sync::mpsc;
 
+/// Backend address: API_URL env var (set to http://api:8000 in Docker), default local.
+pub fn api_base() -> String {
+    std::env::var("API_URL").unwrap_or_else(|_| "http://127.0.0.1:8000".to_string())
+}
+
 enum InputMode {
     Normal,
     Editing,
@@ -288,7 +293,7 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::R
                                 let c = client.clone();
                                 let tx_f = tx.clone();
                                 tokio::spawn(async move {
-                                    if let Ok(resp) = c.get(format!("http://127.0.0.1:8000/api/data/fundamentals/{}", t)).send().await {
+                                    if let Ok(resp) = c.get(format!("{}/api/data/fundamentals/{}", api_base(), t)).send().await {
                                         if let Ok(json) = resp.json::<Value>().await {
                                             let _ = tx_f.send(DataMsg::Fundamentals(json));
                                         }
@@ -299,7 +304,7 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::R
                                 let c = client.clone();
                                 let tx_t = tx.clone();
                                 tokio::spawn(async move {
-                                    if let Ok(resp) = c.get(format!("http://127.0.0.1:8000/api/data/technicals/{}", t)).send().await {
+                                    if let Ok(resp) = c.get(format!("{}/api/data/technicals/{}", api_base(), t)).send().await {
                                         if let Ok(json) = resp.json::<Value>().await {
                                             let _ = tx_t.send(DataMsg::Technicals(json));
                                         }
@@ -310,7 +315,7 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::R
                                 let c = client.clone();
                                 let tx_n = tx.clone();
                                 tokio::spawn(async move {
-                                    if let Ok(resp) = c.get(format!("http://127.0.0.1:8000/api/data/news/{}", t)).send().await {
+                                    if let Ok(resp) = c.get(format!("{}/api/data/news/{}", api_base(), t)).send().await {
                                         if let Ok(json) = resp.json::<Value>().await {
                                             let _ = tx_n.send(DataMsg::News(json));
                                         }
@@ -321,7 +326,7 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::R
                                 let c = client.clone();
                                 let tx_s = tx.clone();
                                 tokio::spawn(async move {
-                                    if let Ok(resp) = c.get(format!("http://127.0.0.1:8000/api/data/sentiment/{}", t)).send().await {
+                                    if let Ok(resp) = c.get(format!("{}/api/data/sentiment/{}", api_base(), t)).send().await {
                                         if let Ok(json) = resp.json::<Value>().await {
                                             let _ = tx_s.send(DataMsg::Sentiment(json));
                                         }
@@ -331,7 +336,7 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::R
                                 let c = client.clone();
                                 let tx_m = tx.clone();
                                 tokio::spawn(async move {
-                                    if let Ok(resp) = c.get("http://127.0.0.1:8000/api/data/macro").send().await {
+                                    if let Ok(resp) = c.get(format!("{}/api/data/macro", api_base())).send().await {
                                         if let Ok(json) = resp.json::<Value>().await {
                                             let _ = tx_m.send(DataMsg::Macro(json));
                                         }

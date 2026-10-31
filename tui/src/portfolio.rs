@@ -15,7 +15,6 @@ use serde_json::Value;
 use std::time::{Duration, Instant};
 use tokio::{sync::mpsc::UnboundedSender, task::JoinHandle};
 
-const BASE: &str = "http://127.0.0.1:8000";
 const REFRESH_EVERY: Duration = Duration::from_secs(30);
 const REQ_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -175,7 +174,7 @@ fn run_tag(execute: bool) -> &'static str {
 
 fn net_err(e: &reqwest::Error) -> String {
     if e.is_connect() || e.is_timeout() {
-        format!("Backend not reachable at {BASE}. Is the server running? ({e})")
+        format!("Backend not reachable at {}. Is the server running? ({e})", crate::api_base())
     } else {
         format!("Request failed: {e}")
     }
@@ -192,7 +191,7 @@ async fn http_err(resp: reqwest::Response) -> String {
 }
 
 async fn get_json(client: &Client, path: &str) -> Result<Value, String> {
-    match client.get(format!("{BASE}{path}")).timeout(REQ_TIMEOUT).send().await {
+    match client.get(format!("{}{path}", crate::api_base())).timeout(REQ_TIMEOUT).send().await {
         Err(e) => Err(net_err(&e)),
         Ok(r) if !r.status().is_success() => Err(http_err(r).await),
         Ok(r) => r.json::<Value>().await.map_err(|e| format!("Bad response from {path}: {e}")),
@@ -209,7 +208,7 @@ async fn run_task(client: Client, tx: UnboundedSender<DataMsg>, id: u64, execute
         let _ = tx.send(DataMsg::Portfolio(m));
     };
     let resp = client
-        .post(format!("{BASE}/api/daily-run?execute={execute}"))
+        .post(format!("{}/api/daily-run?execute={execute}", crate::api_base()))
         .timeout(REQ_TIMEOUT)
         .send()
         .await;
