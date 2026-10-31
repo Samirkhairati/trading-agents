@@ -116,21 +116,5 @@ docker compose down                          # stop
 
 Without Docker: `cd core && python3.11 -m venv venv && venv/bin/pip install -r requirements.txt`, then `venv/bin/python run.py AAPL`, or `cargo run` in `tui/` with the API on 127.0.0.1:8000.
 
-## Demo data
-No history yet? `DEMO_PORTFOLIO=1` in `core/.env` makes `docker compose up -d` serve a seeded **fake** portfolio (random holdings plus 90 days of equity history, kept in `core/data/demo`, never touches Alpaca) so the TUI charts, Grafana gauges and a labelled "DEMO portfolio seed" Langfuse trace have something to show. Re-roll it with `docker compose run --rm api python -m trading.demo`. Set it to 0 (or remove it) to go back to the real account.
-
-## Docker disk space
-If builds fail with "no space left" or Prometheus/Grafana crash-loop with "disk is full", free space (these are shared with all your Docker projects):
-```bash
-docker system df              # what is using space
-docker builder prune -f       # build cache (safe, only slows the next build)
-docker image prune -a -f      # images not used by any container
-docker volume prune -f        # volumes not used by any container (deletes their data)
-```
-A crash-looping Prometheus after a full disk needs its data reset: `docker compose rm -sf prometheus && docker volume rm trading-agents_prometheus_data && docker compose up -d`.
-
 ## Test
 `cd core && venv/bin/python -m pytest -q` (no network, no API key).
-
-## Notes
-Free Gemini is about 20 requests/day per model; a run costs ~10 calls per ticker (`LLM_RPM` throttles). Groq free tier works with the gpt-oss models and `LLM_TPM=7000`. Paper results over a few weeks prove little.
