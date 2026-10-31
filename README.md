@@ -1,44 +1,79 @@
 # SimpleTradingAgents
 
-A small model of [TradingAgents](TradingAgents/): analysts -> bull/bear debate -> research manager -> trader -> risk debate -> portfolio manager, orchestrated with LangGraph. Python backend (`core/`) + Rust TUI (`tui/`).
+A small, runnable model of [TradingAgents](TradingAgents/): a team of LLM agents analyses a stock, and a paper-trading portfolio manager acts on the result. **The LLM proposes; plain Python decides.** Paper trading only. Not financial advice.
 
-## Setup
-```bash
-cd core && python3.11 -m venv venv && venv/bin/pip install -r requirements.txt
-cp .env.example .env   # add GEMINI_API_KEY
+## How it works
+
+```mermaid
+flowchart LR
+    subgraph Analysis["LangGraph pipeline (per ticker)"]
+        A[4 analysts<br/>fundamental, technical,<br/>sentiment, news] --> D[Bull vs Bear debate]
+        D --> RM[Research Manager]
+        RM --> T[Trader]
+        T --> R[Risk debate<br/>aggressive, conservative, neutral]
+        R --> PM[Portfolio Manager<br/>rating: Buy ... Sell]
+    end
+
+    Data[(yfinance, Reddit,<br/>StockTwits, FRED)] --> A
+    Mem[(decisions.json<br/>past decisions + return)] --> PM
+
+    subgraph Daily["Daily run (Python decides)"]
+        S[Screener] --> Analysis
+        PM --> P[Portfolio planner<br/>LLM]
+        P --> G{Risk gate<br/>can veto}
+        G -->|approved| B[Alpaca paper broker]
+        G -->|rejected| L[(trades.json log)]
+        B --> L
+    end
+
+    UI[Rust TUI] <--> API[FastAPI :8000]
+    API --> Daily
+    API -->|/metrics| Prom[Prometheus] --> Graf[Grafana]
+    Analysis -->|traces| LF[Langfuse Cloud]
 ```
 
-## Run (Docker, no Python or Rust needed)
-Put your keys in `core/.env` (copy `core/.env.example`), then:
-- Everything + TUI: `./start.sh` (builds, starts API + Prometheus + Grafana, opens the TUI, stops all on quit)
-- Background stack only: `docker compose up -d --build` (API http://localhost:8000, Grafana http://localhost:3001, Prometheus http://localhost:9090)
-- TUI against a running stack: `docker compose run --rm tui`
-- Analyse one stock: `docker compose run --rm api python run.py AAPL`
-- Paper-trading dry run: `docker compose run --rm api python -m trading.daily_run --tickers AAPL`
-- Daily cycle on a schedule inside the API: `ENABLE_SCHEDULER=1 docker compose up -d` (dry run unless `SCHEDULER_EXECUTE=1`)
+## Features
+- 4 analysts, Bull/Bear debate, Research Manager, Trader, 3-way risk debate, Portfolio Manager; 5-tier rating (Buy / Overweight / Hold / Underweight / Sell).
+- Structured (Pydantic) output from every agent.
+- Decision log with reflection: the next run on a ticker sees the realised return of the last call.
+- Autonomous paper portfolio: screen, analyse, plan, risk gate, execute, log. Dry run by default; orders need `--execute`.
+- Risk gate: 10% max per stock, 10% cash floor, 5 positions, mandatory stop-loss, halt after a 10% drawdown from peak. Sells always pass.
+- Optional weekday 16:30 ET schedule, and an equity-vs-SPY report (`python -m trading.report`).
 
-Without Docker: `cd core && venv/bin/python run.py AAPL`, or `cargo run` in `tui/` with the API on 127.0.0.1:8000 (`API_URL` overrides the address).
+## UI
+Rust terminal app (ratatui). Keys: `a` Analyze (ticker input, live stage progress, coloured rating, reports, debates), `p` Portfolio (equity, positions, trades, trigger dry/execute runs), `q` quit. The raw-data tabs show prices, fundamentals and news.
 
-## Test (no network, no API key)
-`cd core && venv/bin/python -m pytest -q`
+## Built with
+Python 3.11, LangGraph, instructor + LiteLLM (Gemini or Groq), FastAPI, yfinance, Alpaca (`alpaca-py`, paper), Rust + ratatui, Docker Compose, Prometheus, Grafana, OpenTelemetry, Langfuse.
 
-Decisions are logged to `core/data/decisions.json`; the next run on the same ticker gets the realised return as context.
+## Observability
+- **Traces** (Langfuse Cloud, free tier): one trace per analysis, a span per agent, prompts and replies. Set `LANGFUSE_*` in `core/.env`; `TRACE_CONTENT=0` hides the text.
+- **Metrics**: the API serves `/metrics` (LLM calls, tokens, rate limits, node timings, portfolio, orders). Prometheus scrapes it; Grafana has a "Trading Agents" dashboard; alerts live in `observability/prometheus/alerts.yml`.
 
-## Paper trading (Phase 2)
-Alpaca paper keys go in `core/.env` (`ALPACA_API_KEY`, `ALPACA_SECRET_KEY`). Without them a fake in-memory $100k account is used.
+| Service    | URL                   | Login                    |
+|------------|-----------------------|--------------------------|
+| API        | http://localhost:8000 | none                     |
+| Grafana    | http://localhost:3001 | admin / admin-local-pass |
+| Prometheus | http://localhost:9090 | none                     |
+
+## Run
+Copy `core/.env.example` to `core/.env` and add `GEMINI_API_KEY` (or Groq), plus optional `ALPACA_API_KEY` / `ALPACA_SECRET_KEY` (paper) and `LANGFUSE_*`. Without Alpaca keys a fake $100k account is used.
+
 ```bash
-cd core
-venv/bin/python -m trading.daily_run --tickers AAPL   # dry run: screen/analyse/plan/risk-gate, sends nothing
-venv/bin/python -m trading.daily_run --execute        # sends bracket orders to the PAPER account
-venv/bin/python -m trading.daily_run --schedule       # weekdays 16:30 US/Eastern
-venv/bin/python -m trading.report                     # equity vs SPY buy-and-hold
+./start.sh                                   # everything in Docker + the TUI; stops all on quit
+docker compose up -d --build                 # background stack only
+docker compose run --rm tui                  # TUI against a running stack
+docker compose run --rm api python run.py AAPL                              # analyse one stock
+docker compose run --rm api python -m trading.daily_run --tickers AAPL      # dry run
+docker compose run --rm api python -m trading.daily_run --tickers AAPL --execute   # sends PAPER orders
+ENABLE_SCHEDULER=1 docker compose up -d      # daily cycle inside the API (dry run unless SCHEDULER_EXECUTE=1)
+docker compose down                          # stop
 ```
-The LLM only proposes; `trading/risk.py` can veto any order (10% max per stock, 10% cash floor, 5 positions, required stop, drawdown halt).
-Paper results over a few weeks prove little. Not financial advice.
-Free Gemini tier is limited (about 5 requests/minute, ~20/day per model): `LLM_RPM=5` throttles calls; a run costs ~10 calls per ticker.
 
-## Observability (optional)
-Traces go to Langfuse Cloud (free tier). The compose stack includes Prometheus (:9090) and Grafana (dashboard, http://localhost:3001) for metrics. Details: `observability/README.md`.
-- Traces: set `LANGFUSE_BASE_URL`/`LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` in `core/.env` (defaults in `.env.example`); each analysis becomes a trace with a span per agent and every prompt/reply. `TRACE_CONTENT=0` hides the text.
-- Metrics: the API serves `/metrics` (LLM calls, tokens, rate limits, node timings, portfolio, orders). Alerts are defined in `observability/prometheus/alerts.yml`.
-- Unattended daily run: `ENABLE_SCHEDULER=1 ./start.sh` runs the weekday 16:30 ET cycle inside the API (dry run unless `SCHEDULER_EXECUTE=1`) so Prometheus always has a live target.
+Without Docker: `cd core && python3.11 -m venv venv && venv/bin/pip install -r requirements.txt`, then `venv/bin/python run.py AAPL`, or `cargo run` in `tui/` with the API on 127.0.0.1:8000.
+
+## Test
+`cd core && venv/bin/python -m pytest -q` (no network, no API key).
+
+## Notes
+Free Gemini is about 20 requests/day per model; a run costs ~10 calls per ticker (`LLM_RPM` throttles). Groq free tier works with the gpt-oss models and `LLM_TPM=7000`. Paper results over a few weeks prove little.
