@@ -1,5 +1,5 @@
 # Everything in containers:  docker compose up -d --build        (API + Prometheus + Grafana)
-#                            docker compose run --rm tui          (the terminal UI)
+#                            docker compose exec tui tui          (the terminal UI)
 # Keys live in core/.env (never baked into an image). All ports bind to 127.0.0.1.
 name: trading-agents
 
@@ -26,7 +26,8 @@ services:
 
   tui:
     build: ./tui
-    profiles: ["tui"]
+    restart: unless-stopped
+    command: ["sleep", "infinity"]                 # idles; open the UI with: docker compose exec tui tui
     stdin_open: true
     tty: true
     environment:

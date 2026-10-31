@@ -65,3 +65,4 @@ overview.md
 core/data/trades.json
 core/data/portfolio_state.json
 .pytest_cache/
+core/data/demo/

@@ -48,6 +48,9 @@ _tracer = trace.get_tracer("trading-agents")
 _initialised = False
 
 
+_provider = None
+
+
 def init_tracing() -> bool:
     """Send spans to Langfuse over OTLP if its keys are configured. Idempotent; returns whether tracing is on."""
     global _initialised
@@ -71,8 +74,10 @@ def init_tracing() -> bool:
         )
         provider = TracerProvider(resource=Resource.create({"service.name": "trading-agents"}))
         provider.add_span_processor(BatchSpanProcessor(exporter))
-        trace.set_tracer_provider(provider)
-        _set_tracer(trace.get_tracer("trading-agents"))
+        # private provider, not the global one: FastAPI would otherwise trace every /metrics scrape and healthcheck into Langfuse
+        global _provider
+        _provider = provider
+        _set_tracer(provider.get_tracer("trading-agents"))
         _initialised = True
         logger.info("tracing to Langfuse at %s", host)
     except Exception as e:  # observability must never stop the app
@@ -121,8 +126,7 @@ def tag_trace(s: trace.Span, name: str, ticker: Optional[str] = None, **meta) ->
 
 def shutdown() -> None:
     """Flush pending spans (short-lived CLI runs would otherwise exit before the batch exporter sends them)."""
-    provider = trace.get_tracer_provider()
-    flush = getattr(provider, "force_flush", None)
+    flush = getattr(_provider, "force_flush", None)
     if flush:
         try:
             flush(5000)

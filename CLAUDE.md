@@ -193,3 +193,6 @@ every 5 min; `ENABLE_SCHEDULER=1` also runs the weekday daily cycle in-process. 
 - Anything that calls Gemini costs money: smoke tests use a single ticker, short prompts, and the cheap model.
 - When blocked on a decision that is the user's (API key, model choice, scope), ask; otherwise pick the simple option and note it.
 - Final reports to the user: what ran, what the output was, what is not verified.
+
+## Demo mode and portfolio charts
+`DEMO_PORTFOLIO=1` (core/.env) swaps the broker for a seeded FakeBroker (`trading/demo.py`, state in `core/data/demo`, git-ignored) so the TUI value chart / allocation pie, Grafana gauges and a labelled Langfuse trace have data. Never touches Alpaca. The TUI container idles; open it with `docker compose exec tui tui` (`start.sh` does this). The OTel tracer provider is private on purpose: the global one makes FastAPI trace every /metrics scrape into Langfuse.

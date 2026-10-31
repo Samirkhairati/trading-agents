@@ -5,31 +5,72 @@ A small, runnable model of [TradingAgents](TradingAgents/): a team of LLM agents
 ## How it works
 
 ```mermaid
-flowchart LR
-    subgraph Analysis["LangGraph pipeline (per ticker)"]
-        A[4 analysts<br/>fundamental, technical,<br/>sentiment, news] --> D[Bull vs Bear debate]
-        D --> RM[Research Manager]
-        RM --> T[Trader]
-        T --> R[Risk debate<br/>aggressive, conservative, neutral]
-        R --> PM[Portfolio Manager<br/>rating: Buy ... Sell]
+flowchart TB
+    classDef data fill:#e8f1ff,stroke:#3b7ddd,color:#0b2a55
+    classDef analyst fill:#e6f7ec,stroke:#2e9e5b,color:#0b3d20
+    classDef debate fill:#fff4d6,stroke:#d9a400,color:#4d3a00
+    classDef manager fill:#f0e6ff,stroke:#7a4fd1,color:#2a0f5c
+    classDef risk fill:#ffe6e6,stroke:#d64545,color:#5c0f0f
+    classDef code fill:#e9ecef,stroke:#495057,color:#212529
+    classDef out fill:#d3f9d8,stroke:#2b8a3e,color:#0b3d20
+    classDef obs fill:#fde8f3,stroke:#c2255c,color:#5c0f33
+
+    subgraph DATA["Data (fails soft to 'no data')"]
+        YF[(yfinance<br/>prices, fundamentals, news)]:::data
+        ALT[(Reddit, StockTwits,<br/>FRED, Polymarket)]:::data
+        MEM[(decisions.json<br/>past calls + realised return)]:::data
     end
 
-    Data[(yfinance, Reddit,<br/>StockTwits, FRED)] --> A
-    Mem[(decisions.json<br/>past decisions + return)] --> PM
-
-    subgraph Daily["Daily run (Python decides)"]
-        S[Screener] --> Analysis
-        PM --> P[Portfolio planner<br/>LLM]
-        P --> G{Risk gate<br/>can veto}
-        G -->|approved| B[Alpaca paper broker]
-        G -->|rejected| L[(trades.json log)]
-        B --> L
+    subgraph PIPE["LangGraph pipeline, one ticker"]
+        FA[Fundamental<br/>analyst]:::analyst
+        TA[Technical<br/>analyst]:::analyst
+        SA[Sentiment<br/>analyst]:::analyst
+        NA[News and macro<br/>analyst]:::analyst
+        BULL[Bull<br/>researcher]:::debate
+        BEAR[Bear<br/>researcher]:::debate
+        RM[Research Manager<br/>deep model]:::manager
+        TR[Trader<br/>buy / sell / hold plan]:::manager
+        AGG[Aggressive<br/>risk analyst]:::risk
+        CON[Conservative<br/>risk analyst]:::risk
+        NEU[Neutral<br/>risk analyst]:::risk
+        PM[Portfolio Manager<br/>deep model]:::manager
+        RATING([Rating: Buy, Overweight,<br/>Hold, Underweight, Sell]):::out
     end
 
-    UI[Rust TUI] <--> API[FastAPI :8000]
-    API --> Daily
-    API -->|/metrics| Prom[Prometheus] --> Graf[Grafana]
-    Analysis -->|traces| LF[Langfuse Cloud]
+    YF --> FA & TA & SA & NA
+    ALT --> SA & NA
+    FA & TA & SA & NA -->|run in parallel, then join| BULL
+    BULL <-->|debate rounds| BEAR
+    BULL -->|debate over| RM
+    BEAR -->|debate over| RM
+    RM --> TR
+    TR --> AGG --> CON --> NEU
+    NEU --> PM
+    MEM -->|last decision + return| PM
+    PM --> RATING
+
+    subgraph DAILY["Daily run: plain Python decides"]
+        SCR[Screener<br/>watchlist + held, no LLM]:::code
+        PLAN[Portfolio planner<br/>LLM: ratings to order intents]:::manager
+        GATE{{Risk gate<br/>can veto, LLM cannot override}}:::risk
+        BRK[Alpaca paper broker]:::out
+        LOG[(trades.json<br/>orders + rejections)]:::data
+    end
+
+    SCR -->|top N tickers| FA
+    RATING --> PLAN --> GATE
+    GATE -->|approved| BRK --> LOG
+    GATE -->|rejected + reason| LOG
+
+    subgraph APP["App"]
+        TUI[Rust TUI<br/>analyze, portfolio]:::code
+        API[FastAPI :8000]:::code
+    end
+
+    TUI <--> API
+    API --> SCR
+    API -->|/metrics| PROM[Prometheus]:::obs --> GRAF[Grafana]:::obs
+    PIPE -.->|traces| LF[Langfuse Cloud]:::obs
 ```
 
 ## Features
@@ -41,7 +82,7 @@ flowchart LR
 - Optional weekday 16:30 ET schedule, and an equity-vs-SPY report (`python -m trading.report`).
 
 ## UI
-Rust terminal app (ratatui). Keys: `a` Analyze (ticker input, live stage progress, coloured rating, reports, debates), `p` Portfolio (equity, positions, trades, trigger dry/execute runs), `q` quit. The raw-data tabs show prices, fundamentals and news.
+Rust terminal app (ratatui). Keys: `a` Analyze (ticker input, live stage progress, coloured rating, reports, debates), `p` Portfolio (left half: equity, positions, recent runs, dry/execute triggers; right half: portfolio value over time on top, allocation pie chart below, needs a terminal 100+ columns wide), `q` quit. The raw-data tabs show prices, fundamentals and news.
 
 ## Built with
 Python 3.11, LangGraph, instructor + LiteLLM (Gemini or Groq), FastAPI, yfinance, Alpaca (`alpaca-py`, paper), Rust + ratatui, Docker Compose, Prometheus, Grafana, OpenTelemetry, Langfuse.
@@ -62,7 +103,7 @@ Copy `core/.env.example` to `core/.env` and add `GEMINI_API_KEY` (or Groq), plus
 ```bash
 ./start.sh                                   # everything in Docker + the TUI; stops all on quit
 docker compose up -d --build                 # background stack only
-docker compose run --rm tui                  # TUI against a running stack
+docker compose exec tui tui                  # open the TUI (the tui container is part of the stack)
 docker compose run --rm api python run.py AAPL                              # analyse one stock
 docker compose run --rm api python -m trading.daily_run --tickers AAPL      # dry run
 docker compose run --rm api python -m trading.daily_run --tickers AAPL --execute   # sends PAPER orders
@@ -71,6 +112,19 @@ docker compose down                          # stop
 ```
 
 Without Docker: `cd core && python3.11 -m venv venv && venv/bin/pip install -r requirements.txt`, then `venv/bin/python run.py AAPL`, or `cargo run` in `tui/` with the API on 127.0.0.1:8000.
+
+## Demo data
+No history yet? `DEMO_PORTFOLIO=1` in `core/.env` makes `docker compose up -d` serve a seeded **fake** portfolio (random holdings plus 90 days of equity history, kept in `core/data/demo`, never touches Alpaca) so the TUI charts, Grafana gauges and a labelled "DEMO portfolio seed" Langfuse trace have something to show. Re-roll it with `docker compose run --rm api python -m trading.demo`. Set it to 0 (or remove it) to go back to the real account.
+
+## Docker disk space
+If builds fail with "no space left" or Prometheus/Grafana crash-loop with "disk is full", free space (these are shared with all your Docker projects):
+```bash
+docker system df              # what is using space
+docker builder prune -f       # build cache (safe, only slows the next build)
+docker image prune -a -f      # images not used by any container
+docker volume prune -f        # volumes not used by any container (deletes their data)
+```
+A crash-looping Prometheus after a full disk needs its data reset: `docker compose rm -sf prometheus && docker volume rm trading-agents_prometheus_data && docker compose up -d`.
 
 ## Test
 `cd core && venv/bin/python -m pytest -q` (no network, no API key).

@@ -30,7 +30,10 @@ logger = logging.getLogger(__name__)
 WATCHLIST = Path(__file__).resolve().parent.parent / "watchlist.json"
 
 def make_broker() -> Broker:
-    """Alpaca paper if keys are set, otherwise an in-memory fake (prices pulled from yfinance on demand)."""
+    """Seeded demo portfolio if DEMO_PORTFOLIO=1, else Alpaca paper if keys are set, else an in-memory fake (prices from yfinance)."""
+    if os.environ.get("DEMO_PORTFOLIO") == "1":
+        from trading.demo import load_broker
+        return load_broker()
     if os.environ.get("ALPACA_API_KEY") and os.environ.get("ALPACA_SECRET_KEY"):
         return AlpacaBroker()
     logger.warning("No ALPACA keys set: using an in-memory FakeBroker with $100,000.")
@@ -140,8 +143,8 @@ def publish_portfolio(account: Account, positions: List[Position], peak_equity: 
     obs.POSITIONS.set(len(positions))
 
 def refresh_gauges() -> None:
-    """Update the portfolio gauges from the real paper account (skipped without Alpaca keys, a fake $100k would mislead)."""
-    if not (os.getenv("ALPACA_API_KEY") and os.getenv("ALPACA_SECRET_KEY")):
+    """Update the portfolio gauges from the real paper account (skipped without Alpaca keys, a fake $100k would mislead; demo mode publishes the seeded data)."""
+    if os.getenv("DEMO_PORTFOLIO") != "1" and not (os.getenv("ALPACA_API_KEY") and os.getenv("ALPACA_SECRET_KEY")):
         return
     try:
         broker = make_broker()

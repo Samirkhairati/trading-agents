@@ -183,9 +183,12 @@ async def get_portfolio():
     def build():
         broker = make_broker()
         account, positions = broker.get_account(), broker.get_positions()
-        peak = max(trading_state.load_state()["peak_equity"] or 0.0, account.equity)
+        state = trading_state.load_state()
+        peak = max(state["peak_equity"] or 0.0, account.equity)
+        demo = os.environ.get("DEMO_PORTFOLIO") == "1"
         return {
-            "mode": "alpaca-paper" if isinstance(broker, AlpacaBroker) else "fake (no Alpaca keys)",
+            "mode": "DEMO (seeded fake data)" if demo else "alpaca-paper" if isinstance(broker, AlpacaBroker) else "fake (no Alpaca keys)",
+            "equity_history": state["equity_history"][-365:],
             "equity": account.equity, "cash": account.cash, "peak_equity": peak,
             "drawdown_pct": drawdown_pct(account.equity, peak),
             "positions": [

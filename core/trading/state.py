@@ -6,7 +6,10 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 def _dir() -> Path:
-    return Path(os.environ.get("TRADING_STATE_DIR", Path(__file__).resolve().parent.parent / "data"))
+    base = Path(__file__).resolve().parent.parent / "data"
+    if os.environ.get("DEMO_PORTFOLIO") == "1":
+        base = base / "demo"  # seeded fake data lives apart from the real state
+    return Path(os.environ.get("TRADING_STATE_DIR", base))
 
 def _read(name: str, default: Any) -> Any:
     try:

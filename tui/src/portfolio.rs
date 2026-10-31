@@ -7,7 +7,11 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Row, Table, Wrap},
+    symbols::Marker,
+    widgets::{
+        canvas::{Canvas, Painter, Shape},
+        Axis, Block, Borders, Chart, Dataset, GraphType, Paragraph, Row, Table, Wrap,
+    },
     Frame,
 };
 use reqwest::Client;
@@ -516,6 +520,23 @@ fn error_block(f: &mut Frame, area: Rect, lines: &[String]) {
 }
 
 pub fn draw(f: &mut Frame, area: Rect, st: &mut PortfolioState) {
+    if area.width < 100 {
+        return draw_info(f, area, st);
+    }
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(area);
+    let right = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(cols[1]);
+    draw_info(f, cols[0], st);
+    draw_chart(f, right[0], st);
+    draw_pie(f, right[1], st);
+}
+
+fn draw_info(f: &mut Frame, area: Rect, st: &mut PortfolioState) {
     let mut errs: Vec<String> = Vec::new();
     errs.extend(st.portfolio_err.clone());
     errs.extend(st.trades_err.clone());
@@ -530,7 +551,7 @@ pub fn draw(f: &mut Frame, area: Rect, st: &mut PortfolioState) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(4),
+            Constraint::Length(5),
             Constraint::Length(pos_h),
             Constraint::Length(4),
             Constraint::Length(err_h),
@@ -559,10 +580,12 @@ fn draw_header(f: &mut Frame, area: Rect, st: &PortfolioState) {
     let dd = p["drawdown_pct"].as_f64().unwrap_or(0.0);
     let bold = Style::default().add_modifier(Modifier::BOLD);
     let dim = Style::default().fg(Color::DarkGray);
-    let line1 = Line::from(vec![
+    let line0 = Line::from(vec![
         Span::styled("Mode ", dim),
         Span::styled(str_of(p, "mode").to_string(), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-        Span::styled("   Equity ", dim),
+    ]);
+    let line1 = Line::from(vec![
+        Span::styled("Equity ", dim),
         Span::styled(money_or(&p["equity"]), bold),
         Span::styled("   Cash ", dim),
         Span::styled(money_or(&p["cash"]), bold),
@@ -580,7 +603,7 @@ fn draw_header(f: &mut Frame, area: Rect, st: &PortfolioState) {
         Span::styled("   Drawdown ", dim),
         Span::styled(format!("{dd:.2}%"), Style::default().fg(color).add_modifier(Modifier::BOLD)),
     ]);
-    f.render_widget(Paragraph::new(vec![line1, line2]).block(block), area);
+    f.render_widget(Paragraph::new(vec![line0, line1, line2]).block(block), area);
 }
 
 fn draw_positions(f: &mut Frame, area: Rect, st: &PortfolioState) {
@@ -616,12 +639,12 @@ fn draw_positions(f: &mut Frame, area: Rect, st: &PortfolioState) {
         })
         .collect();
     let widths = [
-        Constraint::Length(10),
+        Constraint::Length(7),
+        Constraint::Length(8),
+        Constraint::Length(11),
+        Constraint::Length(11),
         Constraint::Length(12),
-        Constraint::Length(14),
-        Constraint::Length(14),
-        Constraint::Length(16),
-        Constraint::Length(10),
+        Constraint::Length(8),
     ];
     f.render_widget(Table::new(rows, widths).header(head).block(block), area);
 }
@@ -699,4 +722,156 @@ fn draw_runs(f: &mut Frame, area: Rect, st: &mut PortfolioState) {
         ),
         area,
     );
+}
+
+// ---------- charts ----------
+
+fn short_money(n: f64) -> String {
+    if n.abs() >= 1000.0 { format!("${:.1}k", n / 1000.0) } else { format!("${n:.0}") }
+}
+
+/// Equity history as (date, equity) from the /api/portfolio response.
+fn history(st: &PortfolioState) -> Vec<(String, f64)> {
+    st.portfolio
+        .as_ref()
+        .and_then(|p| p["equity_history"].as_array())
+        .map(|a| a.iter().filter_map(|h| Some((h["date"].as_str()?.to_string(), h["equity"].as_f64()?))).collect())
+        .unwrap_or_default()
+}
+
+fn draw_chart(f: &mut Frame, area: Rect, st: &PortfolioState) {
+    let hist = history(st);
+    let block = Block::default().borders(Borders::ALL).title(" Portfolio value ");
+    if hist.len() < 2 {
+        f.render_widget(Paragraph::new("Not enough history yet (one point is saved per daily run).").block(block), area);
+        return;
+    }
+    let pts: Vec<(f64, f64)> = hist.iter().enumerate().map(|(i, (_, e))| (i as f64, *e)).collect();
+    let lo = pts.iter().map(|p| p.1).fold(f64::MAX, f64::min);
+    let hi = pts.iter().map(|p| p.1).fold(f64::MIN, f64::max);
+    let pad = ((hi - lo) * 0.08).max(1.0);
+    let (first, last) = (pts[0].1, pts[pts.len() - 1].1);
+    let ret = if first > 0.0 { (last / first - 1.0) * 100.0 } else { 0.0 };
+    let color = if last >= first { Color::Green } else { Color::Red };
+    let dim = Style::default().fg(Color::DarkGray);
+    let day = |s: &str| s.chars().take(10).collect::<String>();
+    let chart = Chart::new(vec![Dataset::default()
+        .marker(Marker::Braille)
+        .graph_type(GraphType::Line)
+        .style(Style::default().fg(color))
+        .data(&pts)])
+    .block(Block::default().borders(Borders::ALL).title(format!(" Portfolio value  {ret:+.1}% over {} days ", hist.len())))
+    .x_axis(
+        Axis::default()
+            .style(dim)
+            .bounds([0.0, (pts.len() - 1) as f64])
+            .labels(vec![Span::raw(day(&hist[0].0)), Span::raw(day(&hist[hist.len() - 1].0))]),
+    )
+    .y_axis(
+        Axis::default()
+            .style(dim)
+            .bounds([lo - pad, hi + pad])
+            .labels(vec![Span::raw(short_money(lo)), Span::raw(short_money(hi))]),
+    );
+    f.render_widget(chart, area);
+}
+
+/// Filled pie drawn dot by dot; `slices` are (weight, color), the first slice starts at 12 o'clock and runs clockwise.
+struct Pie {
+    slices: Vec<(f64, Color)>,
+    radius: f64,
+}
+
+impl Shape for Pie {
+    fn draw(&self, p: &mut Painter) {
+        let total: f64 = self.slices.iter().map(|s| s.0).sum();
+        if total <= 0.0 {
+            return;
+        }
+        let r = self.radius as i32;
+        for dy in -r..=r {
+            for dx in -r..=r {
+                let (x, y) = (dx as f64, dy as f64);
+                if x * x + y * y > self.radius * self.radius {
+                    continue;
+                }
+                let theta = (std::f64::consts::FRAC_PI_2 - y.atan2(x)).rem_euclid(std::f64::consts::TAU);
+                let frac = theta / std::f64::consts::TAU * total;
+                let mut acc = 0.0;
+                let mut color = self.slices[self.slices.len() - 1].1;
+                for (w, c) in &self.slices {
+                    acc += w;
+                    if frac < acc {
+                        color = *c;
+                        break;
+                    }
+                }
+                if let Some((px, py)) = p.get_point(x, y) {
+                    p.paint(px, py, color);
+                }
+            }
+        }
+    }
+}
+
+const PIE_COLORS: [Color; 8] = [
+    Color::Cyan,
+    Color::Magenta,
+    Color::Yellow,
+    Color::Green,
+    Color::Blue,
+    Color::LightRed,
+    Color::LightCyan,
+    Color::LightMagenta,
+];
+
+fn draw_pie(f: &mut Frame, area: Rect, st: &PortfolioState) {
+    let block = Block::default().borders(Borders::ALL).title(" Allocation (% of equity) ");
+    let Some(p) = st.portfolio.as_ref() else {
+        f.render_widget(Paragraph::new("").block(block), area);
+        return;
+    };
+    let equity = p["equity"].as_f64().unwrap_or(0.0);
+    let mut items: Vec<(String, f64, Color)> = p["positions"]
+        .as_array()
+        .map(|a| a.iter().enumerate().map(|(i, x)| (str_of(x, "symbol").to_string(), x["market_value"].as_f64().unwrap_or(0.0), PIE_COLORS[i % PIE_COLORS.len()])).collect())
+        .unwrap_or_default();
+    items.push(("CASH".into(), p["cash"].as_f64().unwrap_or(0.0).max(0.0), Color::DarkGray));
+    let total: f64 = items.iter().map(|i| i.1).sum();
+    if equity <= 0.0 || total <= 0.0 {
+        f.render_widget(Paragraph::new("Nothing to show.").block(block), area);
+        return;
+    }
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+        .split(inner);
+
+    // braille dots are square: 2 per cell wide, 4 per cell tall
+    let (w, h) = (cols[0].width as f64 * 2.0, cols[0].height as f64 * 4.0);
+    let radius = (w.min(h) / 2.0 - 1.0).max(1.0);
+    let pie = Pie { slices: items.iter().map(|i| (i.1, i.2)).collect(), radius };
+    f.render_widget(
+        Canvas::default()
+            .marker(Marker::Braille)
+            .x_bounds([-w / 2.0, w / 2.0])
+            .y_bounds([-h / 2.0, h / 2.0])
+            .paint(|ctx| ctx.draw(&pie)),
+        cols[0],
+    );
+
+    let legend: Vec<Line> = items
+        .iter()
+        .map(|(name, v, c)| {
+            Line::from(vec![
+                Span::styled("\u{25a0} ", Style::default().fg(*c)),
+                Span::styled(format!("{name:<6}"), Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(format!("{:>5.1}%  ", v / total * 100.0)),
+                Span::styled(short_money(*v), Style::default().fg(Color::DarkGray)),
+            ])
+        })
+        .collect();
+    f.render_widget(Paragraph::new(legend), cols[1]);
 }
