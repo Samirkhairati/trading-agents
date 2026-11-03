@@ -81,6 +81,17 @@ function recentTable(list) {
 }
 
 /* ---------- dashboard ---------- */
+function txTable(list) {
+  if (!list || !list.length) return empty("No transactions yet. Orders the account really took (and cash added) show up here.");
+  const kinds = { buy: ["BUY", "g"], sell: ["SELL", "r"], deposit: ["CASH IN", "c"] };
+  return `<div class="table-wrap"><table><tr><th>time</th><th>type</th><th>symbol</th><th class="n">qty</th><th class="n">price</th><th class="n">amount</th><th class="n">p&amp;l</th><th>note</th></tr>${list.slice(0, 25).map(t => {
+    const [lbl, c] = kinds[t.type] || [String(t.type).toUpperCase(), ""];
+    return `<tr${t.symbol ? ` class="click" data-go="market/${esc(t.symbol)}"` : ""}><td class="f">${esc(when(t.time))}</td><td class="${c}">${lbl}</td><td class="c">${esc(t.symbol || "")}</td>` +
+      `<td class="n">${t.qty != null ? num(t.qty, 3) : "—"}</td><td class="n">${t.price != null ? money(t.price) : "—"}</td><td class="n">${t.amount != null ? money(t.amount) : "—"}</td>` +
+      `<td class="n ${t.pnl != null ? sign(t.pnl) : ""}">${t.pnl != null ? (t.pnl >= 0 ? "+" : "−") + money(Math.abs(t.pnl)) : ""}</td><td class="d" style="padding-left:16px">${esc(t.note || "")}</td></tr>`;
+  }).join("")}</table></div>`;
+}
+
 function viewDash() {
   const p = S.portfolio;
   let h = "";
@@ -105,6 +116,7 @@ function viewDash() {
     const pos = p.positions.length ? `<div class="table-wrap"><table><tr><th>symbol</th><th class="n">qty</th><th class="n">avg entry</th><th class="n">price</th><th class="n">value</th><th class="n">p&amp;l</th></tr>${p.positions.map(x =>
       `<tr class="click" data-go="market/${esc(x.symbol)}"><td class="c">${esc(x.symbol)}</td><td class="n">${num(x.qty, 4)}</td><td class="n">${money(x.avg_entry)}</td><td class="n">${money(x.price)}</td><td class="n">${money(x.market_value)}</td><td class="n ${sign(x.pnl_pct)}">${pct(x.pnl_pct)}</td></tr>`).join("")}</table></div>` : empty("No open positions. The daily cycle decides when to open some.");
     h += panel("positions", pos, `${p.positions.length} open`);
+    h += panel("recent transactions", txTable(p.transactions), p.transactions?.length ? `last ${Math.min(25, p.transactions.length)}` : "");
   } else if (!S.portfolioErr) h += panel("portfolio", empty("loading…"));
   h += `<div class="grid g2e">${panel("live", liveSummary() + `<div style="margin-top:8px"><a data-go="live">open pipeline view →</a></div>`, "", S.live.running ? "hot" : "")}
     ${panel("recent analyses", recentTable(S.analyses.slice(0, 6)), `<a data-go="runs">all</a>`)}</div>`;
@@ -124,17 +136,17 @@ function stageRow(s, i, isLastDone) {
 const LIVE_SKELETON = `<div id="liveRoot"><div id="lv-status"></div><div id="lv-pipe"></div>
   <section class="panel"><h2>queue an analysis<span class="r" id="lv-qcount"></span></h2>
     <form class="qform" id="qForm" autocomplete="off"><input id="qTicker" maxlength="7" placeholder="ticker, e.g. NVDA" aria-label="Ticker to analyse"><button class="btn" id="qBtn" type="submit">queue</button></form>
-    <div class="msg" id="qMsg"></div><div id="lv-qlist"></div>
+    <div class="msg err" id="qLock" hidden></div><div class="msg" id="qMsg"></div><div id="lv-qlist"></div>
     <div class="chips" id="qChips" style="margin-top:10px"></div></section>
   <div id="lv-log"></div></div>`;
 
 function queueList() {
   const Q = S.live.queue || { items: [], max: 3 };
-  if (!Q.items.length) return empty("Nothing queued. The pipeline is free: your analysis starts right away.");
+  if (!Q.items.length) return empty(Q.lock ? "Nothing queued." : "Nothing queued. The pipeline is free: your analysis starts right away.");
   const avg = Q.avg_analysis_seconds || 1500;
   return Q.items.map(it => {
     const src = it.source === "user" ? "visitor" : it.source;
-    const eta = it.running ? '<span class="a">running now</span>' : it.kind === "analysis" ? `starts in ${mins(avg * it.position)}` : "after the ones ahead";
+    const eta = it.running ? '<span class="a">running now</span>' : it.held ? '<span class="a">waits for the daily cycle</span>' : it.kind === "analysis" ? `starts in ${mins(avg * it.position)}` : "after the ones ahead";
     return `<div class="qrow"><span class="pos">${it.running ? "▶" : "#" + it.position}</span><span class="lbl ${it.running ? "a" : ""}">${esc(it.label)}</span><span class="f">${esc(src)}</span><span class="eta">${eta}</span></div>`;
   }).join("");
 }
@@ -147,6 +159,9 @@ function fillLive() {
     setHTML("lv-pipe", panel(`pipeline — ${esc(a.ticker)}`, a.stages.map((s, i) => stageRow(s, i, i === lastDone)).join(""), progressBar(done, a.stages.length, 16)));
   } else setHTML("lv-pipe", L.running ? panel("pipeline", empty("Screening the watchlist or planning orders (no stock analysis at this moment)…")) : "");
   const qc = document.getElementById("lv-qcount"); if (qc) qc.textContent = `${Q.waiting}/${Q.max} waiting`;
+  const lk = document.getElementById("qLock"), locked = !!Q.lock;
+  if (lk) { lk.hidden = !locked; lk.textContent = locked ? Q.lock.message : ""; }
+  document.querySelectorAll("#qTicker,#qBtn,#qChips .chip").forEach(el => { el.disabled = locked; });
   setHTML("lv-qlist", queueList());
   const chips = document.getElementById("qChips");
   if (chips && !chips.dataset.f && S.watchlist.length) { chips.innerHTML = S.watchlist.map(t => `<button class="chip" data-analyze="${esc(t)}">${esc(t)}</button>`).join(""); chips.dataset.f = "1"; }
@@ -159,7 +174,7 @@ function fillLive() {
 async function queueAnalysis(ticker) {
   const msg = $("#qMsg"), btn = $("#qBtn");
   const t = ticker.trim().toUpperCase();
-  if (!t) return;
+  if (!t || S.live.queue?.lock) return;
   if (btn) btn.disabled = true;
   try {
     const r = await fetch("/api/queue", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ticker: t }) });
@@ -174,7 +189,7 @@ async function queueAnalysis(ticker) {
     }
     pollLive();
   } catch (e) { msg.className = "msg err"; msg.textContent = "Could not reach the server."; }
-  if (btn) btn.disabled = false;
+  if (btn) btn.disabled = !!S.live.queue?.lock;
 }
 
 /* ---------- analyses ---------- */

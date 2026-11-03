@@ -186,3 +186,5 @@ svg.flow { width: 100%; height: auto; display: block; }
 .msg { white-space: pre-wrap; margin: 6px 0; } .msg.err { color: var(--red); } .msg.ok { color: var(--green); }
 .qrow { display: flex; gap: 12px; align-items: baseline; padding: 3px 0; border-bottom: 1px dotted var(--line); }
 .qrow .pos { width: 34px; color: var(--dim); } .qrow .lbl { flex: 1; } .qrow .eta { color: var(--dim); }
+
+.qform input:disabled, .chip:disabled, .btn:disabled { opacity: .4; cursor: not-allowed; }

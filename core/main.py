@@ -251,6 +251,8 @@ async def queue_analysis(req: QueueRequest, request: Request):
     ticker = req.ticker.strip().upper()
     if not re.fullmatch(r"[A-Z]{1,5}([.-][A-Z])?", ticker):
         return JSONResponse({"error": "That does not look like a stock ticker.", "queue": snap}, status_code=400)
+    if snap["lock"]:  # the daily cycle owns the model
+        return JSONResponse({"error": "No: " + snap["lock"]["message"], "queue": snap}, status_code=423)
     if snap["waiting"] >= jobs.QUEUE_MAX:  # cheap early refusal before the price lookup
         return JSONResponse({"error": f"No: the queue is full ({jobs.QUEUE_MAX}/{jobs.QUEUE_MAX}). Please wait for an analysis to finish.", "queue": snap}, status_code=429)
     loop = asyncio.get_running_loop()

@@ -58,21 +58,23 @@ class SimBroker(FakeBroker):
 
     def place_order(self, order: ProposedOrder) -> str:
         if order.side == "sell":
-            return self.close_position(order.symbol)
+            return self.close_position(order.symbol, reason=order.reason)
         with _lock:
             self._load()
             oid = super().place_order(order)
-            self._log("buy", symbol=order.symbol, notional=round(order.notional, 2), price=self.prices.get(order.symbol), reason=order.reason[:200])
+            price = self.prices.get(order.symbol)
+            self._log("buy", symbol=order.symbol, notional=round(order.notional, 2), price=price,
+                      qty=round(order.notional / price, 6) if price else None, reason=order.reason[:200])
             self._save()
             return oid
 
-    def close_position(self, symbol: str, source: str = "order") -> str:
+    def close_position(self, symbol: str, source: str = "order", reason: str = "") -> str:
         with _lock:
             self._load()
             qty, avg = self.holdings.get(symbol, (0.0, 0.0))
             price = self.get_price(symbol) if symbol in self.holdings else 0.0
             oid = super().close_position(symbol)
-            self._log("sell", symbol=symbol, qty=qty, price=price, pnl=round((price - avg) * qty, 2), source=source)
+            self._log("sell", symbol=symbol, qty=qty, price=price, pnl=round((price - avg) * qty, 2), source=source, reason=reason[:200])
             self._save()
             return oid
 

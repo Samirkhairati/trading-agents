@@ -121,6 +121,21 @@ class AlpacaBroker:
             )
         return str(self.trading_client.submit_order(req).id)
 
+    def recent_fills(self, limit: int = 50) -> list[dict]:
+        """Filled orders (newest first), including stop-loss / take-profit legs that Alpaca executed on its own."""
+        orders = self.trading_client.get_orders(GetOrdersRequest(status=QueryOrderStatus.CLOSED, limit=limit, direction="desc"))
+        out = []
+        for o in orders:
+            qty = float(o.filled_qty or 0)
+            if qty <= 0 or o.filled_at is None:
+                continue
+            price = float(o.filled_avg_price or 0)
+            kind = str(getattr(o.order_type, "value", o.order_type) or "market")
+            out.append({"time": o.filled_at.isoformat(timespec="seconds"), "type": str(getattr(o.side, "value", o.side)).lower(),
+                        "symbol": o.symbol, "qty": qty, "price": price, "amount": qty * price, "pnl": None,
+                        "note": {"stop": "stop-loss hit", "limit": "take-profit / limit hit"}.get(kind, "")})
+        return out
+
     def close_position(self, symbol: str) -> str:
         # open stop/take legs reserve the shares, so Alpaca refuses to close until they are cancelled
         for o in self.trading_client.get_orders(GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[symbol])):
