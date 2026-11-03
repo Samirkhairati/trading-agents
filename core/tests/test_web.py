@@ -20,6 +20,24 @@ def clean(monkeypatch, tmp_path):
     monkeypatch.setattr(main, "fetch_price_history", lambda t: None)  # every ticker "exists"
     monkeypatch.setattr(sim, "_fetch", lambda s: 100.0)
     sim._cache.clear()
+    yield
+    jobs._waiting.clear()
+    _wait_for(lambda: jobs._current is None)  # no job may outlive its test (the worker is a global thread)
+
+
+def _wait_for(cond, seconds: float = 10.0) -> None:
+    end = time.monotonic() + seconds
+    while not cond():
+        assert time.monotonic() < end, "timed out"
+        time.sleep(0.02)
+
+
+@pytest.fixture
+def gate():
+    """Pipeline jobs block on this until the test ends, so the queue stays in a known state."""
+    g = threading.Event()
+    yield g
+    g.set()
 
 
 def _wait_idle(c: TestClient) -> dict:
@@ -47,12 +65,11 @@ def test_visitor_queues_an_analysis_and_it_is_saved(fake_llm, fake_data):
     assert c.get("/api/history/fake").json()["history"]
 
 
-def test_queue_is_capped_and_tells_whats_ahead(monkeypatch):
-    gate = threading.Event()
-    monkeypatch.setattr("graph.trading_graph.run_analysis", lambda t: gate.wait(5))
+def test_queue_is_capped_and_tells_whats_ahead(monkeypatch, gate):
+    monkeypatch.setattr("graph.trading_graph.run_analysis", lambda t: gate.wait(30))
     c = TestClient(main.app)
     jobs.submit("analysis", "user", ticker="AAA", ip="1.1.1.0")
-    time.sleep(0.3)  # the worker picks AAA up and blocks in it
+    _wait_for(lambda: jobs._current is not None)  # the worker picked AAA up and blocks in it
     for i, t in enumerate(["BBB", "CCC", "DDD"], 1):  # three wait
         jobs.submit("analysis", "user", ticker=t, ip=f"1.1.1.{i}")
     r = c.post("/api/queue", json={"ticker": "EEE"})
@@ -61,18 +78,15 @@ def test_queue_is_capped_and_tells_whats_ahead(monkeypatch):
     assert labels == ["AAA", "BBB", "CCC", "DDD"] and r.json()["queue"]["items"][0]["running"]
     assert c.post("/api/queue", json={"ticker": "bbb"}).status_code in (409, 429)
     assert c.post("/api/queue", json={"ticker": "not a ticker"}).status_code == 400
-    gate.set()
 
 
-def test_one_waiting_analysis_per_visitor(monkeypatch):
-    gate = threading.Event()
-    monkeypatch.setattr("graph.trading_graph.run_analysis", lambda t: gate.wait(5))
+def test_one_waiting_analysis_per_visitor(monkeypatch, gate):
+    monkeypatch.setattr("graph.trading_graph.run_analysis", lambda t: gate.wait(30))
     jobs.submit("analysis", "user", ticker="AAA", ip="9.9.9.9")
-    time.sleep(0.3)
+    _wait_for(lambda: jobs._current is not None)
     jobs.submit("analysis", "user", ticker="BBB", ip="9.9.9.9")  # AAA is running, BBB waits
     with pytest.raises(jobs.Refused):
         jobs.submit("analysis", "user", ticker="CCC", ip="9.9.9.9")
-    gate.set()
 
 
 def test_no_public_way_to_run_the_daily_cycle_or_old_job_endpoints():
