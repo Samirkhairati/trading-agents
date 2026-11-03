@@ -87,8 +87,10 @@ def _run_daily(
     if tickers is None:
         watchlist = json.loads(WATCHLIST.read_text())
         scores = scores if scores is not None else score_watchlist(watchlist)
-        tickers = pick_candidates(scores, held, state["last_analysed"], n=n)
-        screen = {t: {"why": "held position" if t in held else "top mover / volume spike", "score": round(scores.get(t, 0.0), 2)} for t in tickers}
+        tickers = pick_candidates(
+            scores, held, state["last_analysed"], n=n,
+            review_days=int(os.environ.get("HELD_REVIEW_DAYS", "7")), max_held=int(os.environ.get("DAILY_HELD_MAX", "4")))
+        screen = {t: {"why": "held, due for review" if t in held else "top mover / volume spike", "score": round(scores.get(t, 0.0), 2)} for t in tickers}
     labels = [f"{t} ({screen[t]['why']})" if t in screen else t for t in tickers]
     log(f"Candidates: {', '.join(labels) or '(none)'}")
 

@@ -24,15 +24,19 @@ def pick_candidates(
     n: int = 3,
     cooldown_days: int = 3,
     today: Optional[date] = None,
+    review_days: int = 7,
+    max_held: int = 4,
 ) -> List[str]:
-    """Held tickers always come first (they may need a sell). Then top-scoring watchlist names not analysed recently."""
+    """Held tickers come first, but each is only re-reviewed every `review_days` (stops cover the gap; daily re-rating
+    of the same stock by a small model mostly adds churn), oldest review first, at most `max_held` per cycle.
+    Then the top-scoring watchlist names not analysed recently."""
     today = today or date.today()
     held = list(dict.fromkeys(held))
-    cutoff = today - timedelta(days=cooldown_days)
 
-    def recent(t: str) -> bool:
+    def recent(t: str, days: int) -> bool:
         d = last_analysed.get(t)
-        return bool(d) and date.fromisoformat(d) > cutoff
+        return bool(d) and date.fromisoformat(d) > today - timedelta(days=days)
 
-    fresh = [t for t, _ in sorted(scores.items(), key=lambda kv: -kv[1]) if t not in held and not recent(t)]
-    return held + fresh[:n]
+    due = sorted((t for t in held if not recent(t, review_days)), key=lambda t: last_analysed.get(t, ""))[:max_held]
+    fresh = [t for t, _ in sorted(scores.items(), key=lambda kv: -kv[1]) if t not in held and not recent(t, cooldown_days)]
+    return due + fresh[:n]

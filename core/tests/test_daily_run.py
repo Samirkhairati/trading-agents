@@ -22,6 +22,12 @@ def test_screener_held_first_cooldown_and_topn():
     picks = pick_candidates(scores, held=["C"], last_analysed={"B": "2026-01-09"}, n=2, cooldown_days=3, today=today)
     assert picks == ["C", "D", "A"]  # held first, B on cooldown, top 2 of the rest
 
+def test_screener_reviews_held_weekly_oldest_first_and_capped():
+    today = date(2026, 1, 10)
+    last = {"H1": "2026-01-09", "H2": "2026-01-01", "H3": "2026-01-03"}  # H1 reviewed yesterday; H4 never
+    picks = pick_candidates({"A": 5}, held=["H1", "H2", "H3", "H4"], last_analysed=last, n=1, today=today, review_days=7, max_held=2)
+    assert picks == ["H4", "H2", "A"]  # never-reviewed first, then oldest; H1 not due, H3 over the cap
+
 def test_intents_to_orders_sizes_and_defaults():
     acct = Account(cash=50_000, equity=100_000)
     held = [Position("OLD", 10, 50.0, 60.0)]

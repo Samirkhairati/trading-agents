@@ -84,7 +84,7 @@ flowchart TB
 - Structured (Pydantic) output from every agent.
 - Decision log with reflection: the next run on a ticker sees the realised return of the last call.
 - Autonomous paper portfolio: screen, analyse, plan, risk gate, execute, log. Dry run by default; orders need `--execute`.
-- Risk gate: 10% max per stock, 10% cash floor, 5 positions, mandatory stop-loss, halt after a 10% drawdown from peak. Sells always pass.
+- Risk gate: 10% max per stock, 10% cash floor, 15 positions, at most 2 new positions per cycle, mandatory stop-loss, halt after a 10% drawdown from peak. Sells always pass.
 - Optional weekday 16:30 ET schedule, and an equity-vs-SPY report (`python -m trading.report`).
 
 ## UI
@@ -99,7 +99,7 @@ A terminal-styled web app served by the API (plain HTML/JS, no build step). Tabs
 The public UI is read-only apart from that queue: nothing can start a daily cycle, trade, or change the account. An owner page at `/admin` (password in `ADMIN_PASSWORD`, not linked anywhere) can add cash to the simulated account, sell positions and queue a daily cycle.
 
 ## Automation
-`ENABLE_SCHEDULER=1` runs the daily cycle on weekdays at `DAILY_AT` (default 16:30 New York): the screener picks the stocks we hold plus the top `DAILY_CANDIDATES` watchlist movers, each gets the full pipeline (`DEBATE_ROUNDS` bull/bear rounds), then the planner decides whether to enter new positions, keep what we hold, rebalance or do nothing, and the rule-based risk gate vetoes anything unsafe. With `SCHEDULER_EXECUTE=1` approved orders trade the **simulated** account (`PORTFOLIO_MODE=sim`, persistent, $100k start; `alpaca` is still available). If the server was down past the scheduled time and no cycle ran that day, one is queued on start-up. All jobs share one worker, so a cycle and visitor requests run one after another. The daily cycle owns the model: visitors cannot queue analyses while it runs or waits, nor for the `DAILY_LOCK_MINUTES` (default 60) before it starts (the live page shows why), and analyses already waiting are held until the cycle is done.
+`ENABLE_SCHEDULER=1` runs the daily cycle on weekdays at `DAILY_AT` (default 16:30 New York): the screener picks the held stocks that are due a review (each at most every `HELD_REVIEW_DAYS`=7 days, oldest first, up to `DAILY_HELD_MAX`=4 per cycle) plus the top `DAILY_CANDIDATES` watchlist movers, each gets the full pipeline (`DEBATE_ROUNDS` bull/bear rounds), then the planner decides whether to enter new positions, keep what we hold, rebalance or do nothing, and the rule-based risk gate vetoes anything unsafe. With `SCHEDULER_EXECUTE=1` approved orders trade the **simulated** account (`PORTFOLIO_MODE=sim`, persistent, $100k start; `alpaca` is still available). If the server was down past the scheduled time and no cycle ran that day, one is queued on start-up. All jobs share one worker, so a cycle and visitor requests run one after another. The daily cycle owns the model: visitors cannot queue analyses while it runs or waits, nor for the `DAILY_LOCK_MINUTES` (default 60) before it starts (the live page shows why), and analyses already waiting are held until the cycle is done.
 
 ## Local model (no API key)
 `core/.env` can point at an open-source model served by Ollama instead of Gemini/Groq. Ollama is **not** part of this stack: it runs on its own, forever, as a container named `ollama` (here on an Oracle ARM VM, 2 cores / 12 GB).

@@ -41,7 +41,8 @@ class Rejection:
 class RiskConfig:
     max_position_pct: float = 10.0  # max % of equity in one symbol (after the buy)
     min_cash_pct: float = 10.0  # cash that must remain after buys
-    max_positions: int = 5
+    max_positions: int = 15
+    max_new_per_day: int = 2  # new symbols opened in one cycle; adding to a holding doesn't count
     min_order_usd: float = 50.0
     halt_drawdown_pct: float = 10.0  # block new buys if equity this far below its peak
     require_stop: bool = True

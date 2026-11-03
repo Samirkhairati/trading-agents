@@ -32,6 +32,7 @@ def check_orders(
     exposure = {p.symbol: p.market_value for p in positions if p.qty > 0}
     approved: list[ProposedOrder] = []
     rejected: list[Rejection] = []
+    opened = 0
 
     halted = peak_equity is not None and equity <= peak_equity * (1 - cfg.halt_drawdown_pct / 100)
 
@@ -64,6 +65,9 @@ def check_orders(
         if o.symbol not in exposure and len(exposure) >= cfg.max_positions:
             reject(o, f"max_positions: {len(exposure)} positions held, limit is {cfg.max_positions}")
             continue
+        if o.symbol not in exposure and opened >= cfg.max_new_per_day:
+            reject(o, f"max_new_per_day: already opening {opened} new positions this cycle, limit is {cfg.max_new_per_day}")
+            continue
 
         notional = o.notional
         notes: list[str] = []
@@ -91,6 +95,7 @@ def check_orders(
         if notes:
             o = replace(o, notional=notional, reason=(o.reason + " " if o.reason else "") + "[" + "; ".join(notes) + "]")
         cash -= notional
+        opened += o.symbol not in exposure
         exposure[o.symbol] = exposure.get(o.symbol, 0.0) + notional
         approved.append(o)
 

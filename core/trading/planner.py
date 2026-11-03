@@ -3,7 +3,7 @@ from typing import Dict, List
 
 from agents.base import BaseAgent, deep_model
 from agents.schemas import PortfolioPlan
-from trading.types import Account, Position, ProposedOrder
+from trading.types import Account, Position, ProposedOrder, RiskConfig
 
 DEFAULT_STOP_PCT = 7.0
 DEFAULT_TAKE_PCT = 12.0
@@ -18,7 +18,7 @@ class PortfolioAgent(BaseAgent):
             "Then give one intent per ticker. For a held stock decide: continue (hold), add (buy up to a higher weight) or exit (sell), "
             "using the new rating and how the position has performed. For a new candidate buy only with high conviction and room in "
             "the portfolio; skip it otherwise. Doing nothing is a perfectly good answer when nothing is compelling. Limits: at most "
-            "5 positions, at least 10% cash, at most 10% in one stock. Buy/Overweight ratings may justify buys, Hold means keep, "
+            f"{RiskConfig.max_positions} positions, at least {RiskConfig.min_cash_pct:g}% cash, at most {RiskConfig.max_position_pct:g}% in one stock. Buy/Overweight ratings may justify buys, Hold means keep, "
             "Underweight/Sell mean sell if held and skip if not. Use target_weight_pct as the weight after the action. A buy must "
             "include a stop_loss below the current price and a take_profit above it. Only use tickers from the provided lists. Every "
             "intent needs the exact fields symbol (not 'ticker'), action, target_weight_pct, stop_loss, take_profit, reason; reason "
@@ -40,7 +40,7 @@ def build_context(account: Account, positions: List[Position], decisions: Dict[s
         f"suggested size {d.get('position_size')}% | {str(d.get('justification', ''))[:300]}" for t, d in decisions.items()
     ) or "(none)"
     return (
-        f"Equity ${account.equity:,.2f}, cash ${account.cash:,.2f} ({account.cash / account.equity * 100:.1f}%), {len(positions)}/5 positions\n\n"
+        f"Equity ${account.equity:,.2f}, cash ${account.cash:,.2f} ({account.cash / account.equity * 100:.1f}%), {len(positions)}/{RiskConfig.max_positions} positions\n\n"
         f"## Current positions\n{held}\n\n## Fresh analysis\n{ratings}\n\n## Recent trades\n{past_trades or '(none)'}"
     )
 

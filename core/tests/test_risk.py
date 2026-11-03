@@ -1,10 +1,11 @@
 """Risk gate tests: every rule, cumulative batch state, no network."""
+from dataclasses import replace
 import pytest
 
 from trading.risk import check_orders, drawdown_pct, update_peak
 from trading.types import Account, Position, ProposedOrder, RiskConfig
 
-CFG = RiskConfig()  # 10% position, 10% cash, 5 positions, $50 min, 10% halt
+CFG = RiskConfig()  # 10% position, 10% cash, 15 positions, $50 min, 10% halt
 
 
 def buy(symbol="AAPL", notional=500.0, entry=100.0, stop=95.0, take=110.0) -> ProposedOrder:
@@ -96,27 +97,35 @@ def test_take_profit_optional():
 
 
 def test_max_positions_new_symbol_rejected():
-    held = [pos(s, 100) for s in "ABCDE"]
+    held = [pos(f"H{i}", 100) for i in range(CFG.max_positions)]
     ok, bad = check_orders([buy("NEW")], acct(), held, CFG)
     assert ok == [] and "max_positions" in bad[0].reason
 
 
 def test_max_positions_adding_to_existing_allowed():
-    held = [pos(s, 100) for s in "ABCDE"]
-    ok, bad = check_orders([buy("A", notional=200)], acct(), held, CFG)
+    held = [pos(f"H{i}", 100) for i in range(CFG.max_positions)]
+    ok, bad = check_orders([buy("H0", notional=200)], acct(), held, CFG)
     assert len(ok) == 1 and bad == []
 
 
 def test_max_positions_counts_earlier_sell_in_batch():
-    held = [pos(s, 100) for s in "ABCDE"]
-    ok, bad = check_orders([sell("A"), buy("NEW")], acct(), held, CFG)
-    assert [o.symbol for o in ok] == ["A", "NEW"] and bad == []
+    held = [pos(f"H{i}", 100) for i in range(CFG.max_positions)]
+    ok, bad = check_orders([sell("H0"), buy("NEW")], acct(), held, CFG)
+    assert [o.symbol for o in ok] == ["H0", "NEW"] and bad == []
 
 
 def test_max_positions_counts_earlier_buy_in_batch():
-    held = [pos(s, 100) for s in "ABCD"]
+    held = [pos(f"H{i}", 100) for i in range(CFG.max_positions - 1)]
     ok, bad = check_orders([buy("N1"), buy("N2")], acct(), held, CFG)
     assert [o.symbol for o in ok] == ["N1"] and "max_positions" in bad[0].reason
+
+
+def test_max_new_per_day_caps_new_symbols_only():
+    held = [pos("H0", 100)]
+    orders = [buy("N1"), buy("N2"), buy("N3"), buy("H0", notional=200)]
+    ok, bad = check_orders(orders, acct(), held, CFG)
+    assert [o.symbol for o in ok] == ["N1", "N2", "H0"]  # adding to a holding is not a new position
+    assert [r.order.symbol for r in bad] == ["N3"] and "max_new_per_day" in bad[0].reason
 
 
 def test_position_cap_resizes_without_mutating_original():
@@ -167,7 +176,7 @@ def test_cash_floor_applies_cumulatively_across_batch():
     assert ok[1].notional == pytest.approx(500)
     assert sum(o.notional for o in ok) <= 1_500 + 1e-6 and bad == []
     # a third buy has nothing left
-    ok, bad = check_orders([buy("AAA", 1_000), buy("BBB", 1_000), buy("CCC", 500)], a, [], CFG)
+    ok, bad = check_orders([buy("AAA", 1_000), buy("BBB", 1_000), buy("CCC", 500)], a, [], replace(CFG, max_new_per_day=5))
     assert len(ok) == 2 and "min_cash_pct" in bad[0].reason
 
 
@@ -198,7 +207,7 @@ def test_both_resizes_chain():
 
 
 def test_rejection_reasons_are_nonempty_strings():
-    held = [pos(s, 100) for s in "ABCDE"]
+    held = [pos(f"H{i}", 100) for i in range(CFG.max_positions)]
     orders = [buy(notional=1), buy(stop=None), buy(stop=200), buy(take=1), buy("NEW")]
     ok, bad = check_orders(orders, acct(), held, CFG)
     assert ok == [] and len(bad) == len(orders)
