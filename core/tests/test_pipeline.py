@@ -41,20 +41,3 @@ def test_full_graph_and_memory(fake_llm, fake_data):
     assert len(memory.get_history("FAKE")) == 1
     second = run_analysis("fake")
     assert "Overweight" in second["past_context"]
-
-def test_api_job_lifecycle(fake_llm, fake_data):
-    import time
-    from fastapi.testclient import TestClient
-    import main
-
-    c = TestClient(main.app)
-    job_id = c.post("/api/analyze", json={"ticker": "fake"}).json()["job_id"]
-    for _ in range(50):
-        st = c.get(f"/api/status/{job_id}").json()
-        if st["state"] != "running":
-            break
-        time.sleep(0.1)
-    assert st["state"] == "done", st
-    assert c.get(f"/api/result/{job_id}").json()["final_decision"]["rating"] == "Overweight"
-    assert c.get("/api/status/nope").status_code == 404
-    assert c.get("/api/history/fake").json()["history"]

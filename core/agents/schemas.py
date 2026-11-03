@@ -91,4 +91,5 @@ class PlanIntent(BaseModel):
 
 class PortfolioPlan(BaseModel):
     intents: list[PlanIntent] = Field(description="One entry per stock you want to act on or explicitly hold. Never invent tickers outside the provided lists.")
+    stance: Optional[Literal["enter_new", "maintain", "rebalance", "do_nothing"]] = Field(default=None, description="Overall decision: enter_new = open at least one new position, maintain = keep what we hold (may add or trim), rebalance = sell some and buy others, do_nothing = no orders at all.")
     summary: str = Field(description="Short overview of the portfolio stance and cash level.")

@@ -5,8 +5,10 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List
 
+from paths import state_dir
+
 def _dir() -> Path:
-    base = Path(__file__).resolve().parent.parent / "data"
+    base = state_dir()
     if os.environ.get("DEMO_PORTFOLIO") == "1":
         base = base / "demo"  # seeded fake data lives apart from the real state
     return Path(os.environ.get("TRADING_STATE_DIR", base))

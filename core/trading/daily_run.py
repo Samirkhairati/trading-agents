@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import activity
 import observability as obs
 from trading import state as st
 from trading.broker import AlpacaBroker, Broker, FakeBroker
@@ -30,14 +31,14 @@ logger = logging.getLogger(__name__)
 WATCHLIST = Path(__file__).resolve().parent.parent / "watchlist.json"
 
 def make_broker() -> Broker:
-    """Seeded demo portfolio if DEMO_PORTFOLIO=1, else Alpaca paper if keys are set, else an in-memory fake (prices from yfinance)."""
+    """Seeded demo portfolio if DEMO_PORTFOLIO=1; Alpaca paper if PORTFOLIO_MODE=alpaca (keys needed); else the persistent simulated account."""
     if os.environ.get("DEMO_PORTFOLIO") == "1":
         from trading.demo import load_broker
         return load_broker()
-    if os.environ.get("ALPACA_API_KEY") and os.environ.get("ALPACA_SECRET_KEY"):
+    if os.environ.get("PORTFOLIO_MODE") == "alpaca":
         return AlpacaBroker()
-    logger.warning("No ALPACA keys set: using an in-memory FakeBroker with $100,000.")
-    return FakeBroker(cash=100_000)
+    from trading.sim import SimBroker
+    return SimBroker()
 
 def _prices(broker: Broker, symbols: List[str]) -> Dict[str, float]:
     out: Dict[str, float] = {}
@@ -55,7 +56,7 @@ def _run_daily(
     broker: Optional[Broker] = None,
     execute: bool = False,
     tickers: Optional[List[str]] = None,
-    n: int = 3,
+    n: Optional[int] = None,
     cfg: Optional[RiskConfig] = None,
     analyse: Optional[Callable[[str], Dict[str, Any]]] = None,
     scores: Optional[Dict[str, float]] = None,
@@ -65,9 +66,15 @@ def _run_daily(
     """Run one cycle and return the logged record. Everything external is injectable for tests."""
     broker = broker or make_broker()
     cfg = cfg or RiskConfig()
+    n = n if n is not None else int(os.environ.get("DAILY_CANDIDATES", "3"))
+    analysis_ids: Dict[str, str] = {}
     if analyse is None:
         from graph.trading_graph import run_analysis
-        analyse = lambda t: run_analysis(t)["final_decision"]
+
+        def analyse(t: str) -> Dict[str, Any]:
+            s = run_analysis(t)
+            analysis_ids[t] = s.get("analysis_id")
+            return s["final_decision"]
     plan_fn = plan_fn or PortfolioAgent().plan
 
     state = st.load_state()
@@ -76,11 +83,14 @@ def _run_daily(
     log(f"Account: equity ${account.equity:,.2f}, cash ${account.cash:,.2f}, {len(positions)} positions ({'EXECUTE' if execute else 'DRY RUN'})")
 
     # 1-2. screen
+    screen: Dict[str, Any] = {}
     if tickers is None:
         watchlist = json.loads(WATCHLIST.read_text())
         scores = scores if scores is not None else score_watchlist(watchlist)
         tickers = pick_candidates(scores, held, state["last_analysed"], n=n)
-    log(f"Candidates: {', '.join(tickers) or '(none)'}")
+        screen = {t: {"why": "held position" if t in held else "top mover / volume spike", "score": round(scores.get(t, 0.0), 2)} for t in tickers}
+    labels = [f"{t} ({screen[t]['why']})" if t in screen else t for t in tickers]
+    log(f"Candidates: {', '.join(labels) or '(none)'}")
 
     # 3. analyse (one failure must not stop the run)
     decisions: Dict[str, dict] = {}
@@ -127,12 +137,30 @@ def _run_daily(
     st.save_state(state)
     publish_portfolio(final, broker.get_positions(), state["peak_equity"])
     record = {
-        "time": datetime.now().isoformat(timespec="seconds"), "executed": execute, "equity": final.equity, "cash": final.cash,
-        "candidates": tickers, "decisions": decisions, "errors": errors, "summary": plan.summary if plan else "",
+        "time": datetime.now().astimezone().isoformat(timespec="seconds"), "executed": execute, "equity": final.equity, "cash": final.cash,
+        "candidates": tickers, "screen": screen, "stance": _stance(plan, orders, held), "decisions": decisions, "analysis_ids": analysis_ids, "errors": errors, "summary": plan.summary if plan else "",
         "approved": [asdict(o) for o in approved], "rejected": [{**asdict(r.order), "reason": r.reason} for r in rejected], "fills": fills,
     }
     st.log_run(record)
     return record
+
+STANCES = ("enter_new", "maintain", "rebalance", "do_nothing")
+
+def _stance(plan: Any, orders: List[Any], held: List[str]) -> Optional[str]:
+    """The planner's stance; small models sometimes leave the field empty or put it in the summary, so fall back to the orders."""
+    if plan is None:
+        return None
+    if plan.stance:
+        return plan.stance
+    if plan.summary.strip() in STANCES:
+        return plan.summary.strip()
+    buys = [o for o in orders if o.side == "buy"]
+    sells = [o for o in orders if o.side == "sell"]
+    if not orders:
+        return "do_nothing"
+    if buys and sells:
+        return "rebalance"
+    return "enter_new" if any(o.symbol not in held for o in buys) else "maintain"
 
 def publish_portfolio(account: Account, positions: List[Position], peak_equity: float) -> None:
     """Refresh the portfolio gauges Prometheus scrapes."""
@@ -143,13 +171,15 @@ def publish_portfolio(account: Account, positions: List[Position], peak_equity: 
     obs.POSITIONS.set(len(positions))
 
 def refresh_gauges() -> None:
-    """Update the portfolio gauges from the real paper account (skipped without Alpaca keys, a fake $100k would mislead; demo mode publishes the seeded data)."""
-    if os.getenv("DEMO_PORTFOLIO") != "1" and not (os.getenv("ALPACA_API_KEY") and os.getenv("ALPACA_SECRET_KEY")):
-        return
+    """Update the portfolio gauges (and, for the simulated account, today's equity point) every few minutes."""
     try:
         broker = make_broker()
         account = broker.get_account()
-        peak = max(st.load_state()["peak_equity"] or 0.0, account.equity)
+        state = st.load_state()
+        if not isinstance(broker, AlpacaBroker) and os.getenv("DEMO_PORTFOLIO") != "1":
+            st.record_equity(state, account.equity, account.cash)  # one point per day, latest wins
+            st.save_state(state)
+        peak = max(state["peak_equity"] or 0.0, account.equity)
         publish_portfolio(account, broker.get_positions(), peak)
     except Exception as e:
         obs.BROKER_ERRORS.inc()
@@ -158,17 +188,22 @@ def refresh_gauges() -> None:
 def run_daily(*args, **kwargs) -> Dict[str, Any]:
     """Run one cycle with metrics and a trace around it (see _run_daily for the arguments)."""
     start = time.monotonic()
+    owned = activity.job_start("daily", "EXECUTE" if kwargs.get("execute") else "dry run")
+    log = kwargs.get("log", print)
+    kwargs["log"] = lambda line: (activity.log(line), log(line))[1]
     with obs.span("daily_run", kind="span") as root:
         obs.tag_trace(root, "daily run", execute=bool(kwargs.get("execute")))
         try:
             record = _run_daily(*args, **kwargs)
-        except Exception:
+        except Exception as e:
             obs.DAILY_RUNS.labels("error").inc()
+            activity.job_end(owned, False, (str(e).splitlines() or [type(e).__name__])[0])
             raise
         finally:
             obs.DAILY_SECONDS.observe(time.monotonic() - start)
     obs.DAILY_RUNS.labels("ok").inc()
     obs.DAILY_LAST_OK.set_to_current_time()
+    activity.job_end(owned, True, f"daily run done, {len(record['approved'])} orders approved")
     return record
 
 def _recent_trades(k: int = 3) -> str:
@@ -183,7 +218,7 @@ def main() -> None:
     ap.add_argument("--execute", action="store_true", help="send orders to the paper account (default is dry run)")
     ap.add_argument("--schedule", action="store_true", help="run every weekday 16:30 US/Eastern")
     ap.add_argument("--tickers", nargs="*", help="analyse exactly these instead of screening")
-    ap.add_argument("-n", type=int, default=3, help="new candidates from the watchlist")
+    ap.add_argument("-n", type=int, default=None, help="new candidates from the watchlist (default $DAILY_CANDIDATES or 3)")
     args = ap.parse_args()
     logging.basicConfig(level=logging.WARNING)
     obs.init_tracing()

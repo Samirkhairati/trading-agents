@@ -1,11 +1,14 @@
 import json
 import logging
 import os
+import time
 from datetime import date
 from typing import Any, Callable, Dict, Optional
 
 from langgraph.graph import END, START, StateGraph
 
+import activity
+import history
 import memory
 import observability as obs
 from agents.debate import DebateAgent
@@ -39,17 +42,36 @@ logger = logging.getLogger(__name__)
 ANALYSTS = ["Fundamental Analyst", "Technical Analyst", "Sentiment Analyst", "News Analyst"]
 TOTAL_STAGES = len(ANALYSTS) + 2 * MAX_DEBATE_ROUNDS + 1 + 1 + 3 * MAX_RISK_ROUNDS + 1
 
+def stage_plan() -> list:
+    """Node names in the order they finish (analysts run in parallel, so their order within the first four varies)."""
+    return (ANALYSTS + ["Bull Researcher", "Bear Researcher"] * MAX_DEBATE_ROUNDS + ["Research Manager", "Trader"]
+            + ["Aggressive Analyst", "Conservative Analyst", "Neutral Analyst"] * MAX_RISK_ROUNDS + ["Portfolio Manager"])
+
+def _stage_output(delta: dict) -> str:
+    """The text an agent just produced, for the live view."""
+    for key in ("fundamentals_report", "market_report", "sentiment_report", "news_report", "investment_plan", "trader_plan"):
+        if delta.get(key):
+            return delta[key]
+    for key in ("debate_history", "risk_history"):
+        if delta.get(key):
+            return delta[key][-1]
+    if delta.get("final_decision"):
+        return json.dumps(delta["final_decision"], indent=2)
+    return ""
+
 def _soft(fn: Callable, *args) -> str:
     """Run a data fetch; a failure becomes text for the analyst instead of aborting the run."""
     try:
         out = fn(*args)
-        return out if isinstance(out, str) else json.dumps(out, default=str)[:6000]
+        text = out if isinstance(out, str) else json.dumps(out, default=str)
+        return text[:int(os.environ.get("LLM_DATA_CHARS", "6000"))]  # a CPU-hosted model prefills ~15 tokens/s, so raw data is capped
     except Exception as e:
         logger.warning("%s failed: %s", getattr(fn, "__name__", fn), e)
         return f"<data unavailable: {e}>"
 
 def _clip(text: str, n: int = 1500) -> str:
-    """Keep downstream prompts small (Groq's free tier allows 8K tokens/minute)."""
+    """Keep downstream prompts small (Groq's free tier allows 8K tokens/minute; a CPU-hosted model prefills ~15 tokens/s)."""
+    n = int(n * float(os.environ.get("LLM_CLIP_SCALE", "1")))
     return text if len(text) <= n else text[:n] + " ..."
 
 def _reports(state: AgentState) -> str:
@@ -68,7 +90,7 @@ def fundamental_node(state: AgentState) -> dict:
     return {"fundamentals_report": f"Score {out.score}/10\n{out.reasoning}"}
 
 def technical_node(state: AgentState) -> dict:
-    price_text = format_price_report(fetch_price_history(state["ticker"]))  # no data -> fail the run
+    price_text = format_price_report(fetch_price_history(state["ticker"]), int(os.environ.get("PRICE_DAYS", "15")))  # no data -> fail the run
     out = TechnicalAnalyst().analyze_technicals(price_text)
     return {"market_report": f"Score {out.score}/10\n{out.reasoning}", "price_report": price_text}
 
@@ -181,6 +203,9 @@ def run_analysis(
     state["past_context"] = memory.get_past_context(ticker, last_price)
 
     done = 0
+    t0 = time.monotonic()
+    owned = activity.job_start("analysis", ticker)
+    activity.analysis_start(ticker, stage_plan())
     with obs.span("analysis", kind="span", ticker=ticker) as root:
         obs.tag_trace(root, f"analysis {ticker}", ticker=ticker, trade_date=state["trade_date"])
         try:
@@ -188,13 +213,22 @@ def run_analysis(
                 for node, delta in update.items():
                     state.update(delta or {})
                     done += 1
+                    activity.analysis_stage(node, _stage_output(delta or {}))
                     if on_progress:
                         on_progress(node, done, TOTAL_STAGES)
             memory.save_decision(ticker, state["final_decision"], last_price)
-        except Exception:
+        except Exception as e:
             obs.ANALYSIS_RUNS.labels("error").inc()
+            activity.analysis_end()
+            activity.job_end(owned, False, f"{ticker}: {(str(e).splitlines() or [type(e).__name__])[0]}")
             raise
         obs.ANALYSIS_RUNS.labels("ok").inc()
         root.set_attribute("langfuse.trace.output", json.dumps(state["final_decision"], default=str))
     state["last_price"] = last_price
+    try:
+        state["analysis_id"] = history.save_analysis(state, activity.analysis_stages(), time.monotonic() - t0, os.environ.get("LLM_MODEL", ""))
+    except OSError as e:
+        logger.warning("could not save analysis: %s", e)
+    activity.analysis_end()
+    activity.job_end(owned, True, f"{ticker}: {state['final_decision']['rating']}")
     return state

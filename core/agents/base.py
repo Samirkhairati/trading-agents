@@ -5,6 +5,7 @@ import time
 from collections import deque
 import instructor
 import observability as obs
+import litellm
 from litellm import completion
 from pydantic import BaseModel
 from typing import Type, TypeVar, Optional
@@ -13,7 +14,10 @@ T = TypeVar('T', bound=BaseModel)
 
 # Built once at import: instructor registers providers lazily and that is not thread-safe,
 # so creating clients inside parallel graph nodes can fail with a RegistryError.
-_client = instructor.from_litellm(completion)
+# LLM_MODE: tools (default, hosted APIs) | json_schema (local Ollama: grammar-constrained, most reliable for small models) | json
+litellm.drop_params = True  # local servers reject params like reasoning_effort; drop instead of erroring
+_MODES = {"tools": instructor.Mode.TOOLS, "json_schema": instructor.Mode.JSON_SCHEMA, "json": instructor.Mode.JSON}
+_client = instructor.from_litellm(completion, mode=_MODES[os.environ.get("LLM_MODE", "tools")])
 
 _calls: deque = deque()
 _tokens: dict = {}  # model -> deque of [monotonic time, tokens]; LLM_TPM is a per-model limit
@@ -72,6 +76,9 @@ def deep_model() -> str:
 
 class BaseAgent:
     def __init__(self, role_prompt: str, model: str = None):
+        if (model or os.environ.get("LLM_MODEL", "")).startswith(("ollama", "openai/")) and os.environ.get("LLM_BRIEF", "1") == "1":
+            # small local models on CPU generate ~5 tokens/s: cap every free-text field
+            role_prompt += "\n\nIMPORTANT: be concise. Every text field must be at most 80 words of plain prose. No markdown tables, no headings, no bullet lists."
         self.role_prompt = role_prompt
         # Pull from env or default to a cheap gemini model
         self.model = model or os.environ.get("LLM_MODEL", "gemini/gemini-3.5-flash")
@@ -93,7 +100,8 @@ class BaseAgent:
                 messages=messages,
                 response_model=response_format,
                 reasoning_effort=os.environ.get("LLM_REASONING", "low"),
-                timeout=120,
+                max_tokens=int(os.environ.get("LLM_MAX_TOKENS", "0")) or None,
+                timeout=int(os.environ.get("LLM_TIMEOUT", "120")),
                 num_retries=5,
             )
             _registry_ready.set()

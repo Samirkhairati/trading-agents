@@ -62,3 +62,4 @@ def fake_data(monkeypatch):
 @pytest.fixture(autouse=True)
 def tmp_decisions(tmp_path, monkeypatch):
     monkeypatch.setenv("DECISIONS_PATH", str(tmp_path / "decisions.json"))
+    monkeypatch.setenv("ANALYSES_DIR", str(tmp_path / "analyses"))

@@ -28,6 +28,14 @@ Prefer 20 plain lines over one abstraction. Match the existing style (type hints
   optional `LLM_DEEP_MODEL` (Research Manager + Portfolio Manager; defaults to `LLM_MODEL`).
 - Gemini free tier = ~20 requests/day PER MODEL. A run costs 8 + 2*DEBATE_ROUNDS calls (~2-4 min). `core/.env` uses `LLM_MODEL=gemini/gemini-3.1-flash-lite` (10 calls) + `LLM_DEEP_MODEL=gemini/gemini-3.5-flash` (2 calls) + `DEBATE_ROUNDS=1` => ~2 runs/day on lite, 10 on 3.5. `gemini-3.8-flash` hung once; check model names with the ListModels REST call, they change often.
 - Groq free tier (alternative, see `.env.example`): per model 8K tokens/min and 200K tokens/day; a full analysis is ~57K tokens (~8 min with `LLM_TPM=7000`), so ~3 runs/day/model. `qwen3.8-27b` also has an output-tokens/min cap and failed; use the gpt-oss models.
+- Local model option: Ollama in Docker on the Oracle VM (`ssh oracle-vm`, standalone container `ollama` on docker network `llm`, never part of the compose stack, 127.0.0.1:11434, model `qwen3:4b-instruct-2507-q4_K_M`), reached through
+  `ssh -fN -L 11434:127.0.0.1:11434 oracle-vm`. `core/.env` sets `LLM_MODEL=ollama_chat/...`, `LLM_MODE=json_schema`, `LLM_TIMEOUT`, `LLM_MAX_TOKENS`. ~6 tokens/s on 2 ARM cores:
+  one analysis takes 10-20 min, so test with one ticker and never run two jobs at once (the API returns 409). The VM also hosts other projects: keep the container's `--memory 7g`.
+- Account: default `PORTFOLIO_MODE=sim` = `trading/sim.py` persistent simulated account (supports admin deposits/sells); state dir = `STATE_DIR` (Docker volume `trading-agents_state` on the server). Keep every new persistent file under `paths.state_dir()`.
+- CI/CD: `.github/workflows/deploy.yml` (test -> GHCR image -> SSH deploy). Server public host: trading-agents.samirkhairati.me (Caddy, `./deploy.sh public`).
+- Server deploy: `./deploy.sh` (+ `public` / `tunnel`), overlay `docker-compose.vm.yml`; public hosts are sslip.io names added to `/opt/caddy/Caddyfile` (backup `.bak`); public UI is read-only (non-GET blocked in Caddy).
+- Web UI: `core/web/` (vanilla JS, served by the API at `/`) replaced the TUI (`tui/` is kept but no longer in compose and cannot start jobs: the public API is read-only except `POST /api/queue`). Owner page `/admin` (`core/admin.py`, `ADMIN_PASSWORD` in core/.env, never mentioned in the public JS/HTML; a test enforces that). Jobs: `core/jobs.py` (one worker, visitor queue capped at QUEUE_MAX=3, scheduler + admin bypass the cap). `core/activity.py` = live state for `/api/live`,
+  `core/history.py` = one JSON per finished analysis in `core/data/analyses/` (git-ignored) for `/api/analyses`.
 - Data: yfinance for prices, fundamentals, news (required). Reddit / StockTwits / FRED / Polymarket are optional extras:
   any failure must degrade to a "no data" string, never crash a run, and must not block for more than ~10s.
 - Rust: `tui/` (`cargo run` from there). Backend on `http://127.0.0.1:8000`.

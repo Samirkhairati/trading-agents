@@ -11,13 +11,18 @@ DEFAULT_TAKE_PCT = 12.0
 class PortfolioAgent(BaseAgent):
     def __init__(self, model: str = None):
         role_prompt = (
-            "You are the portfolio manager of a small PAPER-trading long-only equity portfolio. You receive the account, current "
-            "positions, and fresh analyst decisions (rating, target, stop) for a few tickers. Decide per ticker: buy (open or add), "
-            "sell (close), or hold. Use target_weight_pct as the desired weight after the action; keep positions few and concentrated "
-            "only in high-conviction names, keep meaningful cash, never exceed 10% in one stock. Buy/Overweight ratings may justify "
-            "buys, Hold means keep, Underweight/Sell mean sell if held and skip if not. A buy must include a stop_loss below the current "
-            "price and a take_profit above it. Only use tickers from the provided lists. Every intent needs the exact fields "
-            "symbol (not 'ticker'), action, target_weight_pct, stop_loss, take_profit, reason; reason is never optional."
+            "You are the portfolio manager of a small simulated long-only equity portfolio. Each day you receive the account, the "
+            "current positions, and fresh analyst decisions (rating, target, stop) for two kinds of tickers: stocks we already HOLD and "
+            "NEW candidates picked by a screener. First choose one overall stance: enter_new (open at least one new position), "
+            "maintain (keep what we hold; may add or trim), rebalance (sell some, buy others) or do_nothing (no orders at all). "
+            "Then give one intent per ticker. For a held stock decide: continue (hold), add (buy up to a higher weight) or exit (sell), "
+            "using the new rating and how the position has performed. For a new candidate buy only with high conviction and room in "
+            "the portfolio; skip it otherwise. Doing nothing is a perfectly good answer when nothing is compelling. Limits: at most "
+            "5 positions, at least 10% cash, at most 10% in one stock. Buy/Overweight ratings may justify buys, Hold means keep, "
+            "Underweight/Sell mean sell if held and skip if not. Use target_weight_pct as the weight after the action. A buy must "
+            "include a stop_loss below the current price and a take_profit above it. Only use tickers from the provided lists. Every "
+            "intent needs the exact fields symbol (not 'ticker'), action, target_weight_pct, stop_loss, take_profit, reason; reason "
+            "is never optional."
         )
         super().__init__(role_prompt=role_prompt, model=model or deep_model())
 
@@ -29,12 +34,13 @@ def build_context(account: Account, positions: List[Position], decisions: Dict[s
         f"- {p.symbol}: {p.qty:g} sh, avg {p.avg_entry:.2f}, now {p.price:.2f} ({p.pnl_pct:+.1f}%), "
         f"weight {p.market_value / account.equity * 100:.1f}%" for p in positions
     ) or "(none)"
+    held_syms = {p.symbol for p in positions}
     ratings = "\n".join(
-        f"- {t}: {d['rating']}, price target {d.get('target_price')}, stop {d.get('stop_loss')}, "
+        f"- {t} ({'HELD' if t in held_syms else 'new candidate'}): {d['rating']}, price target {d.get('target_price')}, stop {d.get('stop_loss')}, "
         f"suggested size {d.get('position_size')}% | {str(d.get('justification', ''))[:300]}" for t, d in decisions.items()
     ) or "(none)"
     return (
-        f"Equity ${account.equity:,.2f}, cash ${account.cash:,.2f} ({account.cash / account.equity * 100:.1f}%)\n\n"
+        f"Equity ${account.equity:,.2f}, cash ${account.cash:,.2f} ({account.cash / account.equity * 100:.1f}%), {len(positions)}/5 positions\n\n"
         f"## Current positions\n{held}\n\n## Fresh analysis\n{ratings}\n\n## Recent trades\n{past_trades or '(none)'}"
     )
 

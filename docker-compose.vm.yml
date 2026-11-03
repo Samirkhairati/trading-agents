@@ -1,0 +1,9 @@
+# Server overlay (deploy.sh sets COMPOSE_FILE to use it): the api joins the Docker network the standalone `ollama` container is on,
+# so OLLAMA_API_BASE=http://ollama:11434 works with no published ports or firewall rules.
+services:
+  api:
+    networks: [default, llm]
+
+networks:
+  llm:
+    external: true

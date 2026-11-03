@@ -5,10 +5,10 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-DEFAULT_PATH = Path(__file__).parent / "data" / "decisions.json"
+from paths import state_dir
 
 def _path() -> Path:
-    return Path(os.environ.get("DECISIONS_PATH", DEFAULT_PATH))
+    return Path(os.environ.get("DECISIONS_PATH", state_dir() / "decisions.json"))
 
 def _load() -> List[Dict[str, Any]]:
     try:

@@ -79,3 +79,17 @@ def test_equity_stats():
     from trading.report import equity_stats
     s = equity_stats([{"equity": 100}, {"equity": 120}, {"equity": 90}, {"equity": 110}])
     assert round(s["return_pct"], 1) == 10.0 and round(s["max_drawdown_pct"], 1) == 25.0
+
+
+def test_stance_falls_back_to_the_orders():
+    from types import SimpleNamespace as NS
+    from trading.daily_run import _stance
+    plan = lambda stance=None, summary="": NS(stance=stance, summary=summary)
+    buy, sell = NS(side="buy", symbol="NEW"), NS(side="sell", symbol="OLD")
+    assert _stance(None, [], []) is None
+    assert _stance(plan("rebalance"), [], []) == "rebalance"
+    assert _stance(plan(summary="do_nothing"), [buy], []) == "do_nothing"  # the model wrote it in the summary
+    assert _stance(plan(), [], []) == "do_nothing"
+    assert _stance(plan(), [buy, sell], ["OLD"]) == "rebalance"
+    assert _stance(plan(), [buy], ["OLD"]) == "enter_new"
+    assert _stance(plan(), [NS(side="buy", symbol="OLD")], ["OLD"]) == "maintain"

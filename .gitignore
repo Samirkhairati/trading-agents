@@ -66,3 +66,7 @@ core/data/trades.json
 core/data/portfolio_state.json
 .pytest_cache/
 core/data/demo/
+core/data/analyses/
+core/data/*.json
+core/data/analyses/
+state/

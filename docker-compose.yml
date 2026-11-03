@@ -1,10 +1,12 @@
 # Everything in containers:  docker compose up -d --build        (API + Prometheus + Grafana)
-#                            docker compose exec tui tui          (the terminal UI)
+#                            http://localhost:8000                (the web UI, served by the api)
+# On a server: ./deploy.sh (adds docker-compose.vm.yml so the api reaches an Ollama container that runs separately).
 # Keys live in core/.env (never baked into an image). All ports bind to 127.0.0.1.
 name: trading-agents
 
 services:
   api:
+    image: ghcr.io/samirkhairati/trading-agents:${TAG:-latest}   # pushed by .github/workflows/deploy.yml; `build` is used when building locally
     build: ./core
     restart: unless-stopped
     ports:
@@ -12,29 +14,19 @@ services:
     env_file:
       - path: ./core/.env
         required: false
-    environment:
-      ENABLE_SCHEDULER: ${ENABLE_SCHEDULER:-0}      # 1 = run the weekday 16:30 ET cycle inside the API
-      SCHEDULER_EXECUTE: ${SCHEDULER_EXECUTE:-0}    # 1 = send orders to the PAPER account (default dry run)
+    environment:                                      # scheduler settings (ENABLE_SCHEDULER, SCHEDULER_EXECUTE, DAILY_AT...) come from core/.env
+      STATE_DIR: /app/state
+      OLLAMA_API_BASE: ${OLLAMA_API_BASE:-http://host.docker.internal:11434}   # Ollama runs outside this stack; here: a tunnel to it (see docker-compose.vm.yml for the server)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
-      - ./core/data:/app/data                        # decision log, trades, portfolio state survive rebuilds
+      - state:/app/state                             # analyses, decision log, trades and the simulated account: identical across rebuilds and redeploys
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/metrics')"]
       interval: 10s
       timeout: 5s
       retries: 6
       start_period: 15s
-
-  tui:
-    build: ./tui
-    restart: unless-stopped
-    command: ["sleep", "infinity"]                 # idles; open the UI with: docker compose exec tui tui
-    stdin_open: true
-    tty: true
-    environment:
-      API_URL: http://api:8000
-    depends_on:
-      api:
-        condition: service_healthy
 
   prometheus:
     image: prom/prometheus:v2.55.1
@@ -60,8 +52,10 @@ services:
       - "127.0.0.1:3001:3000"
     environment:
       GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: admin-local-pass
-      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin-local-pass}
+      GF_AUTH_ANONYMOUS_ENABLED: ${GRAFANA_ANONYMOUS:-false}      # true = anyone can view dashboards (read-only)
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://localhost:3001}
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_ANALYTICS_REPORTING_ENABLED: "false"
       GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
@@ -76,5 +70,6 @@ services:
       retries: 5
 
 volumes:
+  state:                                           # `docker compose down` keeps it; `down -v` would delete it
   prometheus_data:
   grafana_data:
