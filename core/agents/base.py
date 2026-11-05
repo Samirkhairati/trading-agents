@@ -85,7 +85,7 @@ class BaseAgent:
         
         self.client = _client
 
-    def _create(self, messages: list, response_format: Type[T]):
+    def _create(self, messages: list, response_format: Type[T], max_tokens: int = 0):
         # instructor loads its provider registry on the first call and that is not thread-safe, so until
         # one call has gone through, parallel graph nodes take turns.
         first = not _registry_ready.is_set()
@@ -100,7 +100,7 @@ class BaseAgent:
                 messages=messages,
                 response_model=response_format,
                 reasoning_effort=os.environ.get("LLM_REASONING", "low"),
-                max_tokens=int(os.environ.get("LLM_MAX_TOKENS", "0")) or None,
+                max_tokens=max_tokens or int(os.environ.get("LLM_MAX_TOKENS", "0")) or None,
                 timeout=int(os.environ.get("LLM_TIMEOUT", "120")),
                 num_retries=5,
             )
@@ -148,13 +148,17 @@ class BaseAgent:
         # conservative estimate: prompt chars/2.5 plus room for reasoning + the structured reply
         slot = blocked(_wait_for_tokens, self.model, int(sum(len(m["content"]) for m in messages) / 2.5) + 1500)
         start = time.monotonic()
+        cap = int(os.environ.get("LLM_MAX_TOKENS", "0"))
         try:
             for attempt in range(8):
                 blocked(_throttle)
                 try:
-                    response, raw = self._create(messages, response_format)
+                    response, raw = self._create(messages, response_format, cap)
                     return response, raw, slot
                 except Exception as e:  # instructor wraps litellm errors, so match on the text
+                    if "max_tokens length limit" in str(e) and cap and cap < 4 * int(os.environ["LLM_MAX_TOKENS"]):
+                        cap *= 2  # reply was cut off by LLM_MAX_TOKENS: ask again with more room instead of failing the analysis
+                        continue
                     if "tool_use_failed" in str(e) and attempt < 2:
                         continue  # the provider rejected a malformed tool call; just ask again
                     if "RateLimitError" not in str(e):

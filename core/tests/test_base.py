@@ -71,6 +71,32 @@ def test_tool_use_failed_is_retried_without_sleeping(agent):
     assert agent.slept == []
 
 
+def test_truncated_reply_is_retried_with_a_bigger_cap(agent, monkeypatch):
+    monkeypatch.setenv("LLM_MAX_TOKENS", "700")
+    caps = []
+    cut = Exception("The output is incomplete due to a max_tokens length limit.")
+    queue = [cut, (OK, raw())]
+
+    def create_with_completion(**kw):
+        caps.append(kw["max_tokens"])
+        r = queue.pop(0)
+        if isinstance(r, Exception):
+            raise r
+        return r
+
+    agent.client.chat.completions.create_with_completion = create_with_completion
+    assert agent.analyze("ctx", AnalystOutput) == OK
+    assert caps == [700, 1400]
+
+
+def test_truncation_gives_up_after_the_cap_doubles_twice(agent, monkeypatch):
+    monkeypatch.setenv("LLM_MAX_TOKENS", "700")
+    cut = Exception("The output is incomplete due to a max_tokens length limit.")
+    script(agent, cut, cut, cut)
+    with pytest.raises(Exception, match="max_tokens"):
+        agent.analyze("ctx", AnalystOutput)
+
+
 def test_other_errors_propagate(agent):
     script(agent, ValueError("boom"))
     with pytest.raises(ValueError):
