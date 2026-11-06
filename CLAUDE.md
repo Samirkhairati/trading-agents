@@ -145,11 +145,10 @@ New package `core/trading/` (absolute imports, same style as the rest):
 trading/types.py       dataclasses: Account, Position, ProposedOrder, Rejection, RiskConfig (shared interface, already written)
 trading/broker.py      Broker protocol; AlpacaBroker (alpaca-py, paper); FakeBroker (in-memory, used by tests + dry-run)
 trading/risk.py        check_orders(orders, account, positions, cfg, peak_equity) -> (approved, rejected); pure functions
-trading/screener.py    pick_candidates(watchlist, held, ...) -> tickers to analyse (no LLM)
+trading/screener.py    fetch_universe() (live Yahoo most-active/gainers/losers, large caps) + pick_candidates(scores, held, ...) -> tickers to analyse (no LLM)
 trading/planner.py     PortfolioAgent (LLM): ratings + account + positions -> PortfolioPlan (list of order intents)
 trading/daily_run.py   the loop: screen -> analyse -> plan -> risk gate -> execute -> log. CLI: --dry-run (default) / --execute
 trading/state.py       data/trades.json (decision+order log) and data/portfolio_state.json (peak equity, last-analysed dates)
-watchlist.json         ~20 liquid tickers (core/watchlist.json)
 ```
 Env: `ALPACA_API_KEY`, `ALPACA_SECRET_KEY` (paper keys; never print or commit). Tests use `FakeBroker`, no network, no LLM.
 
@@ -170,7 +169,7 @@ Pure functions, heavily unit-tested (this is the most important module). Each re
 **Verify:** pytest covers every rule, plus "sells always pass", "halt on drawdown", "cash floor applies across multiple orders in one batch".
 
 ### Chunk 9 - Screener, planner, daily run
-- Screener: include held tickers that are due (re-reviewed every `HELD_REVIEW_DAYS`=7 days, `DAILY_HELD_MAX`=4 per cycle, oldest first); score watchlist by |5-day move|, volume spike vs 20d avg, headline count; skip tickers analysed in the
+- Screener: include held tickers that are due (re-reviewed every `HELD_REVIEW_DAYS`=7 days, `DAILY_HELD_MAX`=4 per cycle, oldest first); score the live universe (no fixed watchlist) by |5-day move|, volume spike vs 20d avg, headline count; skip tickers analysed in the
   last `ANALYSE_COOLDOWN_DAYS` (default 3) unless held; return top N (default 3). No LLM.
 - Planner: one LLM call (deep model) with cash/positions/ratings/past trades -> `PortfolioPlan(orders=[intent(symbol, action buy|sell|hold, weight_pct, stop_loss, take_profit, reason)], summary)`.
   Convert to `ProposedOrder` in code (weight_pct * equity -> notional; stop/take default to entry -/+ 2xATR-ish percentages if the LLM omits them).

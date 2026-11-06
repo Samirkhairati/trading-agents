@@ -155,7 +155,8 @@ def test_live_snapshot_marks_running_stages():
 def test_schedule_endpoint_and_catch_up(monkeypatch):
     c = TestClient(main.app)
     assert c.get("/api/schedule").json()["rule"].endswith("America/New_York")
-    assert "AAPL" in c.get("/api/watchlist").json()["tickers"]
+    monkeypatch.setattr("trading.screener.fetch_universe", lambda: ["NVDA", "AAPL"])
+    assert c.get("/api/watchlist").json()["tickers"] == ["NVDA", "AAPL"]
     queued = []
     monkeypatch.setattr(jobs, "submit", lambda *a, **k: queued.append((a, k)))
     from datetime import datetime
@@ -248,3 +249,16 @@ def test_a_waiting_visitor_analysis_waits_for_the_daily_cycle(monkeypatch, gate)
     with jobs._lock:
         jobs._lock.notify()
     _wait_for(lambda: not jobs._waiting and jobs._current is None)
+
+
+def test_fetch_universe_filters_and_degrades(monkeypatch):
+    from trading import screener
+    screener._cache.update(at=0.0, tickers=[])
+    quotes = {"most_actives": [{"symbol": "NVDA", "marketCap": 4e12, "regularMarketPrice": 180}, {"symbol": "TINY", "marketCap": 1e9, "regularMarketPrice": 50}],
+              "day_gainers": [{"symbol": "PENNY", "marketCap": 2e10, "regularMarketPrice": 2}, {"symbol": "NVDA", "marketCap": 4e12, "regularMarketPrice": 180}]}
+    def fake(name, count=25):
+        if name == "day_losers":
+            raise RuntimeError("down")
+        return {"quotes": quotes[name]}
+    monkeypatch.setattr(screener.yf, "screen", fake)
+    assert screener.fetch_universe() == ["NVDA"]

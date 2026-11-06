@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -217,7 +218,8 @@ async def get_schedule():
 
 @app.get("/api/watchlist")
 async def get_watchlist():
-    return {"tickers": json.loads((Path(__file__).parent / "watchlist.json").read_text())}
+    from trading.screener import fetch_universe
+    return {"tickers": await run_in_threadpool(fetch_universe)}
 
 @app.get("/api/analyses")
 async def list_analyses(ticker: Optional[str] = None, limit: int = 100):

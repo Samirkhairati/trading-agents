@@ -5,13 +5,11 @@
     python -m trading.daily_run --schedule      # weekdays 16:30 US/Eastern
 """
 import argparse
-import json
 import logging
 import os
 import time
 from dataclasses import asdict
 from datetime import date, datetime
-from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from dotenv import load_dotenv
@@ -24,11 +22,10 @@ from trading import state as st
 from trading.broker import AlpacaBroker, Broker, FakeBroker
 from trading.planner import PortfolioAgent, build_context, intents_to_orders
 from trading.risk import check_orders, drawdown_pct
-from trading.screener import pick_candidates, score_watchlist
+from trading.screener import fetch_universe, pick_candidates, score_watchlist
 from trading.types import Account, Position, RiskConfig
 
 logger = logging.getLogger(__name__)
-WATCHLIST = Path(__file__).resolve().parent.parent / "watchlist.json"
 
 def make_broker() -> Broker:
     """Seeded demo portfolio if DEMO_PORTFOLIO=1; Alpaca paper if PORTFOLIO_MODE=alpaca (keys needed); else the persistent simulated account."""
@@ -85,8 +82,7 @@ def _run_daily(
     # 1-2. screen
     screen: Dict[str, Any] = {}
     if tickers is None:
-        watchlist = json.loads(WATCHLIST.read_text())
-        scores = scores if scores is not None else score_watchlist(watchlist)
+        scores = scores if scores is not None else score_watchlist(fetch_universe())
         tickers = pick_candidates(
             scores, held, state["last_analysed"], n=n,
             review_days=int(os.environ.get("HELD_REVIEW_DAYS", "7")), max_held=int(os.environ.get("DAILY_HELD_MAX", "4")))
@@ -220,7 +216,7 @@ def main() -> None:
     ap.add_argument("--execute", action="store_true", help="send orders to the paper account (default is dry run)")
     ap.add_argument("--schedule", action="store_true", help="run every weekday 16:30 US/Eastern")
     ap.add_argument("--tickers", nargs="*", help="analyse exactly these instead of screening")
-    ap.add_argument("-n", type=int, default=None, help="new candidates from the watchlist (default $DAILY_CANDIDATES or 3)")
+    ap.add_argument("-n", type=int, default=None, help="new candidates from the live market screens (default $DAILY_CANDIDATES or 3)")
     args = ap.parse_args()
     logging.basicConfig(level=logging.WARNING)
     obs.init_tracing()

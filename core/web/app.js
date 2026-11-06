@@ -157,7 +157,7 @@ function fillLive() {
   if (a) {
     const done = a.stages.filter(s => s.done).length, lastDone = a.stages.map(s => s.done).lastIndexOf(true);
     setHTML("lv-pipe", panel(`pipeline — ${esc(a.ticker)}`, a.stages.map((s, i) => stageRow(s, i, i === lastDone)).join(""), progressBar(done, a.stages.length, 16)));
-  } else setHTML("lv-pipe", L.running ? panel("pipeline", empty("Screening the watchlist or planning orders (no stock analysis at this moment)…")) : "");
+  } else setHTML("lv-pipe", L.running ? panel("pipeline", empty("Screening the market or planning orders (no stock analysis at this moment)…")) : "");
   const qc = document.getElementById("lv-qcount"); if (qc) qc.textContent = `${Q.waiting}/${Q.max} waiting`;
   const lk = document.getElementById("qLock"), locked = !!Q.lock;
   if (lk) { lk.hidden = !locked; lk.textContent = locked ? Q.lock.message : ""; }
