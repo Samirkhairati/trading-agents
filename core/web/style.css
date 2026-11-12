@@ -45,6 +45,15 @@ nav button b { color: var(--faint); font-weight: 400; margin-right: 6px; }
 nav button:hover { color: var(--fg); background: #121a16; }
 nav button.on { color: var(--bg); background: var(--green); }
 nav button.on b { color: #0b3a1d; }
+.mkt { display: flex; gap: 4px; }
+.mkt[hidden] { display: none; }
+.mkt button {
+  background: none; border: 1px solid var(--line); color: var(--dim); font: inherit; padding: 3px 9px; cursor: pointer; white-space: nowrap; border-radius: 3px;
+}
+.mkt button .flag { font-size: 15px; margin-right: 2px; }
+.mkt button:hover { color: var(--fg); border-color: var(--faint); }
+.mkt button.on { color: var(--green); border-color: var(--green); background: #101c15; }
+.mkhead { margin-top: 12px; }
 .status { display: flex; align-items: center; gap: 10px; color: var(--dim); white-space: nowrap; font-size: 12px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); display: inline-block; }
 .dot.ok { background: var(--green); box-shadow: 0 0 8px var(--green); }
@@ -57,11 +66,19 @@ main { flex: 1; padding: 6px 16px 24px; max-width: 1500px; width: 100%; margin: 
 .g2 { grid-template-columns: 3fr 2fr; }
 .g2e { grid-template-columns: 1fr 1fr; }
 .g-runs { grid-template-columns: minmax(260px, 340px) 1fr; align-items: start; }
+/* the header is crowded (brand, tabs, market switch, search, two clocks): the tabs drop to a second row below 1280px */
+@media (max-width: 1280px) {
+  #top { flex-wrap: wrap; gap: 8px 14px; }
+  .brand .sub { display: none; }
+  nav { order: 3; flex-basis: 100%; }
+  .mkt { margin-left: auto; }
+}
 @media (max-width: 900px) {
   .g2, .g2e, .g-runs { grid-template-columns: 1fr; }
   #top { flex-wrap: wrap; gap: 8px; }
   .brand .sub { display: none; }
   nav { order: 3; flex-basis: 100%; }
+  .mkt { margin-left: auto; }
   main { padding: 6px 10px 24px; }
 }
 .panel { position: relative; border: 1px solid var(--line); background: var(--panel); padding: 16px 14px 12px; margin-top: 16px; border-radius: 2px; min-width: 0; }
@@ -76,7 +93,8 @@ main { flex: 1; padding: 6px 16px 24px; max-width: 1500px; width: 100%; margin: 
 .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; margin-top: 16px; }
 .stat { border: 1px solid var(--line); background: var(--panel); padding: 8px 12px; border-radius: 2px; }
 .stat .k { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .1em; }
-.stat .v { font-size: 20px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.stat .v { font-size: 20px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.stat .v.sm { font-size: 16px; }  /* ₹1,00,00,000.00 does not fit a tile at full size */
 .stat .s { color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
 
 /* colours */

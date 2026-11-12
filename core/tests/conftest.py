@@ -8,6 +8,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 os.environ.setdefault("DEBATE_ROUNDS", "2")  # load_dotenv never overrides, so tests ignore .env
+os.environ.setdefault("MARKETS", "us")  # tests that need India switch it on; wall-clock lock windows stay US-only
 
 from agents import schemas as s  # noqa: E402
 

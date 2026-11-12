@@ -11,8 +11,9 @@
   <header id="top">
     <div class="brand"><span class="glyph">▌</span>trading-agents<span class="sub" id="modelTag"></span></div>
     <nav id="tabs"></nav>
+    <div class="mkt" id="mktSwitch" role="group" aria-label="Market" hidden></div>
     <form id="searchForm" autocomplete="off">
-      <input id="search" list="tickerList" spellcheck="false" autocapitalize="characters" maxlength="8" placeholder="🔍 ticker  ( / )" aria-label="Search a ticker">
+      <input id="search" list="tickerList" spellcheck="false" autocapitalize="characters" maxlength="20" placeholder="🔍 ticker  ( / )" aria-label="Search a ticker">
       <datalist id="tickerList"></datalist>
     </form>
     <div class="status"><span id="llmDot" class="dot" title="backend"></span><span id="clock"></span></div>

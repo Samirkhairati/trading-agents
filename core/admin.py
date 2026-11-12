@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 import jobs
+from trading import markets
 
 router = APIRouter(prefix="/api/admin")
 TTL = 12 * 3600
@@ -56,54 +57,65 @@ def logout(request: Request, response: Response):
     response.delete_cookie("admin_session", path="/")
     return {"ok": True}
 
-@router.get("/overview", dependencies=[Depends(require)])
-def overview():
-    from trading.view import portfolio_snapshot
-    return {"portfolio": portfolio_snapshot(), "queue": jobs.snapshot()}
+def _market(code: str) -> str:
+    try:
+        return markets.get(code).code
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
-def _snapshot_equity(broker) -> None:
+@router.get("/overview", dependencies=[Depends(require)])
+def overview(market: str = "us"):
+    from trading.view import portfolio_snapshot
+    return {"portfolio": portfolio_snapshot(_market(market)), "queue": jobs.snapshot()}
+
+def _snapshot_equity(broker, market: str) -> None:
     from trading import state as st
-    s = st.load_state()
+    s = st.load_state(market)
     a = broker.get_account()
     st.record_equity(s, a.equity, a.cash)
-    st.save_state(s)
+    st.save_state(s, market)
 
 class Cash(BaseModel):
-    amount: float = Field(gt=0, le=10_000_000)
+    amount: float = Field(gt=0, le=1_000_000_000)  # in the market's own currency
+    market: str = "us"
 
 @router.post("/cash", dependencies=[Depends(require)])
 def add_cash(body: Cash):
     from trading.daily_run import make_broker
-    broker = make_broker()
+    market = _market(body.market)
+    broker = make_broker(market)
     if not hasattr(broker, "deposit"):
         raise HTTPException(400, "this account type cannot take deposits (only the simulated account can)")
     broker.deposit(body.amount)
-    _snapshot_equity(broker)
+    _snapshot_equity(broker, market)
     return {"ok": True, "cash": broker.get_account().cash}
 
 class Sell(BaseModel):
     symbol: str  # a ticker, or ALL
+    market: str = "us"
 
 @router.post("/sell", dependencies=[Depends(require)])
 def sell(body: Sell):
     from trading.daily_run import make_broker
-    broker = make_broker()
+    market = _market(body.market)
+    broker = make_broker(market)
     held = [p.symbol for p in broker.get_positions()]
     targets = held if body.symbol.upper() == "ALL" else [body.symbol.upper()]
     if not targets or any(t not in held for t in targets):
         raise HTTPException(400, f"not held: {body.symbol}")
     for t in targets:
         broker.close_position(t, source="admin") if hasattr(broker, "deposit") else broker.close_position(t)
-    _snapshot_equity(broker)
+    _snapshot_equity(broker, market)
     return {"ok": True, "sold": targets}
 
 class Daily(BaseModel):
     execute: bool = False
+    market: str = "us"
 
 @router.post("/daily", dependencies=[Depends(require)])
 def run_daily(body: Daily):
     try:
-        return jobs.submit("daily", "admin", execute=body.execute)
+        return jobs.submit("daily", "admin", execute=body.execute, market=_market(body.market))
     except jobs.Refused as r:
         raise HTTPException(r.status, r.message)
 

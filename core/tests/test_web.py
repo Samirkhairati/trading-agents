@@ -155,7 +155,7 @@ def test_live_snapshot_marks_running_stages():
 def test_schedule_endpoint_and_catch_up(monkeypatch):
     c = TestClient(main.app)
     assert c.get("/api/schedule").json()["rule"].endswith("America/New_York")
-    monkeypatch.setattr("trading.screener.fetch_universe", lambda: ["NVDA", "AAPL"])
+    monkeypatch.setattr("trading.screener.fetch_universe", lambda market="us": ["NVDA", "AAPL"])
     assert c.get("/api/watchlist").json()["tickers"] == ["NVDA", "AAPL"]
     queued = []
     monkeypatch.setattr(jobs, "submit", lambda *a, **k: queued.append((a, k)))
@@ -201,7 +201,7 @@ def _daily_at(minutes_from_now: int) -> str:
 
 
 def test_visitors_are_locked_out_while_the_daily_cycle_runs(monkeypatch, gate):
-    monkeypatch.setattr("trading.daily_run.run_daily", lambda execute=False: gate.wait(30))
+    monkeypatch.setattr("trading.daily_run.run_daily", lambda execute=False, **kw: gate.wait(30))
     c = TestClient(main.app)
     jobs.submit("daily", "admin")
     _wait_for(lambda: jobs._current is not None)
@@ -253,7 +253,7 @@ def test_a_waiting_visitor_analysis_waits_for_the_daily_cycle(monkeypatch, gate)
 
 def test_fetch_universe_filters_and_degrades(monkeypatch):
     from trading import screener
-    screener._cache.update(at=0.0, tickers=[])
+    screener._cache.clear()
     quotes = {"most_actives": [{"symbol": "NVDA", "marketCap": 4e12, "regularMarketPrice": 180}, {"symbol": "TINY", "marketCap": 1e9, "regularMarketPrice": 50}],
               "day_gainers": [{"symbol": "PENNY", "marketCap": 2e10, "regularMarketPrice": 2}, {"symbol": "NVDA", "marketCap": 4e12, "regularMarketPrice": 180}]}
     def fake(name, count=25):
@@ -262,3 +262,111 @@ def test_fetch_universe_filters_and_degrades(monkeypatch):
         return {"quotes": quotes[name]}
     monkeypatch.setattr(screener.yf, "screen", fake)
     assert screener.fetch_universe() == ["NVDA"]
+
+
+# ---------------------------------------------------------------- two markets: US and India
+
+def test_each_market_has_its_own_portfolio_and_currency():
+    from trading.types import ProposedOrder
+    c = TestClient(main.app)
+    us, india = c.get("/api/portfolio").json(), c.get("/api/portfolio?market=in").json()
+    assert us["market"]["code"] == "us" and us["cash"] == 100_000 and us["market"]["currency"] == "$"
+    assert india["market"] == {"code": "in", "label": "India", "flag": "🇮🇳", "currency": "₹", "tz": "Asia/Kolkata", "benchmark": "^NSEI"}
+    assert india["cash"] == 10_000_000 and india["positions"] == []
+    sim.SimBroker("in").place_order(ProposedOrder("TCS.NS", "buy", notional=100_000, entry_price=100, stop_loss=90, take_profit=120))
+    assert [p["symbol"] for p in c.get("/api/portfolio?market=in").json()["positions"]] == ["TCS.NS"]
+    assert c.get("/api/portfolio").json()["positions"] == []  # US untouched
+    assert c.get("/api/portfolio?market=xx").status_code == 400
+
+
+def test_shorts_show_up_with_side_exposure_and_ledger_entries():
+    from trading.types import ProposedOrder
+    c = TestClient(main.app)
+    b = sim.SimBroker()
+    b.place_order(ProposedOrder("AAA", "short", notional=2_000, entry_price=100, stop_loss=108, take_profit=85, reason="weak"))
+    p = c.get("/api/portfolio").json()
+    pos = p["positions"][0]
+    assert pos["side"] == "short" and pos["qty"] == pytest.approx(-20) and pos["market_value"] == pytest.approx(-2_000)
+    assert p["short_exposure"] == pytest.approx(2_000) and p["short_exposure_pct"] == pytest.approx(2.0) and p["equity"] == pytest.approx(100_000)
+    b.close_position("AAA", source="stop", reason="stop-loss hit at 110")
+    tx = c.get("/api/portfolio").json()["transactions"]
+    assert [t["type"] for t in tx] == ["cover", "short"] and tx[0]["note"] == "stop-loss hit" and tx[1]["amount"] == 2_000
+
+
+def test_trades_schedule_and_config_are_per_market(monkeypatch):
+    from trading import state as trading_state
+    monkeypatch.setenv("MARKETS", "us,in")
+    trading_state.log_run({"time": "2026-01-01T10:00:00+00:00", "market": "in"}, "in")
+    c = TestClient(main.app)
+    assert c.get("/api/trades?market=in").json()["runs"][0]["market"] == "in" and c.get("/api/trades").json()["runs"] == []
+    assert c.get("/api/schedule?market=in").json()["rule"] == "mon-fri 16:00 Asia/Kolkata"
+    cfg = c.get("/api/config").json()
+    assert [m["code"] for m in cfg["markets"]] == ["us", "in"] and cfg["shorting"] is True
+    monkeypatch.setattr("trading.screener.fetch_universe", lambda market="us": ["TCS.NS"] if market == "in" else ["AAPL"])
+    assert c.get("/api/watchlist?market=in").json()["tickers"] == ["TCS.NS"]
+
+
+def test_visitors_can_queue_indian_tickers_only_with_the_suffix(monkeypatch, gate):
+    monkeypatch.setattr("graph.trading_graph.run_analysis", lambda t: gate.wait(30))
+    c = TestClient(main.app)
+    assert c.post("/api/queue", json={"ticker": "RELIANCE"}).status_code == 400  # looks like neither a US nor an NSE ticker
+    assert c.post("/api/queue", json={"ticker": "reliance.ns"}).status_code == 200
+    assert jobs.snapshot()["items"][0]["label"] == "RELIANCE.NS"
+
+
+def test_analyses_can_be_filtered_by_market():
+    import history
+    for t in ("AAPL", "TCS.NS"):
+        history.save_analysis({"ticker": t, "final_decision": {"rating": "Hold"}}, [], 1.0, "m")
+    c = TestClient(main.app)
+    assert [a["ticker"] for a in c.get("/api/analyses?market=in").json()["analyses"]] == ["TCS.NS"]
+    assert [a["ticker"] for a in c.get("/api/analyses?market=us").json()["analyses"]] == ["AAPL"]
+    assert len(c.get("/api/analyses").json()["analyses"]) == 2
+
+
+def test_admin_cash_sell_and_daily_work_on_the_chosen_market(monkeypatch):
+    c = TestClient(main.app)
+    assert c.post("/api/admin/login", json={"password": "pw-for-tests"}).status_code == 200
+    assert c.post("/api/admin/cash", json={"amount": 500_000, "market": "in"}).json()["cash"] == 10_500_000
+    assert c.get("/api/admin/overview?market=in").json()["portfolio"]["deposited"] == 10_500_000
+    assert c.get("/api/admin/overview").json()["portfolio"]["cash"] == 100_000
+    assert c.post("/api/admin/cash", json={"amount": 5, "market": "zz"}).status_code == 400
+    monkeypatch.setattr("trading.daily_run.run_daily", lambda **kw: None)
+    assert c.post("/api/admin/daily", json={"execute": False, "market": "in"}).status_code == 200
+    _wait_idle(c)
+
+
+def _hhmm(minutes_from_now: int, tz: str) -> str:
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    return (datetime.now(ZoneInfo(tz)) + timedelta(minutes=minutes_from_now)).strftime("%H:%M")
+
+
+def test_visitors_are_locked_out_before_the_india_cycle_too(monkeypatch):
+    monkeypatch.setattr("graph.trading_graph.run_analysis", lambda t: None)
+    monkeypatch.setenv("ENABLE_SCHEDULER", "1")
+    monkeypatch.setenv("DAILY_DAYS", "mon-sun")
+    monkeypatch.setenv("MARKETS", "us,in")
+    monkeypatch.setenv("DAILY_AT", _hhmm(600, "America/New_York"))  # US is far away
+    c = TestClient(main.app)
+    monkeypatch.setenv("DAILY_AT_IN", _hhmm(120, "Asia/Kolkata"))
+    assert c.post("/api/queue", json={"ticker": "AAA"}).status_code == 200
+    _wait_idle(c)
+    monkeypatch.setenv("DAILY_AT_IN", _hhmm(45, "Asia/Kolkata"))
+    r = c.post("/api/queue", json={"ticker": "BBB"})
+    assert r.status_code == 423 and "India daily cycle starts at" in r.json()["error"] and "IST" in r.json()["error"]
+    assert c.get("/api/live").json()["queue"]["lock"]["market"] == "in"
+
+
+def test_both_markets_can_have_a_daily_cycle_queued_at_once(monkeypatch, gate):
+    ran = []
+    monkeypatch.setattr("trading.daily_run.run_daily", lambda execute=False, market="us": (ran.append(market), gate.wait(30)))
+    jobs.submit("daily", "admin", market="us")
+    _wait_for(lambda: jobs._current is not None)
+    jobs.submit("daily", "admin", market="in")
+    with pytest.raises(jobs.Refused, match="US daily cycle is already"):
+        jobs.submit("daily", "admin", market="us")
+    labels = [i["label"] for i in jobs.snapshot()["items"]]
+    assert labels == ["US daily cycle (dry run)", "India daily cycle (dry run)"]
+    gate.set()
+    _wait_for(lambda: ran == ["us", "in"] and jobs._current is None)

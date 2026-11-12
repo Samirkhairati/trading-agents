@@ -7,10 +7,12 @@ import time
 import uuid
 from collections import deque
 from datetime import datetime, timedelta
-from typing import Any, Deque, Dict, Optional
+from typing import Any, Deque, Dict, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 import activity
+from trading import markets
+from trading.markets import Market
 
 logger = logging.getLogger(__name__)
 QUEUE_MAX = int(os.environ.get("QUEUE_MAX", "3"))
@@ -29,19 +31,19 @@ _current: Optional[Dict[str, Any]] = None
 _worker: Optional[threading.Thread] = None
 _durations: Deque[float] = deque(maxlen=5)  # seconds of recent single analyses, for wait estimates
 
-def _next_daily(now: datetime) -> Optional[datetime]:
-    """Next scheduled daily-cycle time (None when the scheduler is off). A minute of grace keeps the window open while the cycle is being queued."""
+def _next_daily(now: datetime, mk: Market) -> Optional[datetime]:
+    """Next scheduled daily-cycle time of a market (None when the scheduler is off). A minute of grace keeps the window open while the cycle is being queued."""
     if os.environ.get("ENABLE_SCHEDULER") != "1":
         return None
     from apscheduler.triggers.cron import CronTrigger
-    h, m = os.environ.get("DAILY_AT", "16:30").split(":")
-    trigger = CronTrigger(day_of_week=os.environ.get("DAILY_DAYS", "mon-fri"), hour=int(h), minute=int(m), timezone=ET)
+    h, m = markets.daily_at(mk)
+    trigger = CronTrigger(day_of_week=os.environ.get("DAILY_DAYS", "mon-fri"), hour=h, minute=m, timezone=ZoneInfo(mk.tz))
     return trigger.get_next_fire_time(None, now - timedelta(seconds=60))
 
-def _in_window(now: datetime) -> Optional[datetime]:
-    """The daily cycle's start time when it is within LOCK_MINUTES (or just passed), else None."""
-    nxt = _next_daily(now)
-    return nxt if nxt and nxt - now <= timedelta(minutes=LOCK_MINUTES) else None
+def _in_window(now: datetime) -> Optional[Tuple[datetime, Market]]:
+    """The first daily cycle (start time, market) that is within LOCK_MINUTES (or just passed), else None."""
+    due = [(nxt, mk) for mk in markets.enabled() for nxt in [_next_daily(now, mk)] if nxt and nxt - now <= timedelta(minutes=LOCK_MINUTES)]
+    return min(due, key=lambda d: d[0]) if due else None
 
 def lock(now: Optional[datetime] = None) -> Optional[Dict[str, Any]]:
     """Why visitors cannot queue an analysis right now (the daily cycle owns the model), or None."""
@@ -50,11 +52,12 @@ def lock(now: Optional[datetime] = None) -> Optional[Dict[str, Any]]:
         if any(j["kind"] == "daily" for j in ([_current] if _current else []) + list(_waiting)):
             return {"kind": "daily", "message": "The daily cycle is running (it screens stocks, analyses them and trades the account). "
                                                 "Analyses open again when it finishes."}
-    start = _in_window(now)
-    if start:
+    window = _in_window(now)
+    if window:
+        start, mk = window
         mins = max(0, int((start - now).total_seconds() // 60))
-        return {"kind": "window", "starts": start.isoformat(),
-                "message": f"The daily cycle starts at {start.astimezone(ET):%H:%M} ET ({'in ' + str(mins) + ' min' if mins else 'now'}). "
+        return {"kind": "window", "starts": start.isoformat(), "market": mk.code,
+                "message": f"The {mk.label} daily cycle starts at {start.astimezone(ZoneInfo(mk.tz)):%H:%M} {start.astimezone(ZoneInfo(mk.tz)).tzname()} ({'in ' + str(mins) + ' min' if mins else 'now'}). "
                            f"Analyses are closed for the {LOCK_MINUTES} minutes before it so the model is free; they open again after the cycle."}
     return None
 
@@ -63,10 +66,10 @@ def _held(j: dict, now: datetime) -> bool:
     return j["source"] == "user" and (_in_window(now) is not None or any(w["kind"] == "daily" for w in _waiting))
 
 def _label(j: dict) -> str:
-    return j["ticker"] if j["kind"] == "analysis" else f"daily cycle ({'execute' if j['execute'] else 'dry run'})"
+    return j["ticker"] if j["kind"] == "analysis" else f"{markets.get(j['market']).label} daily cycle ({'execute' if j['execute'] else 'dry run'})"
 
 def _view(j: dict, pos: int, running: bool, held: bool = False) -> dict:
-    return {"id": j["id"], "label": _label(j), "kind": j["kind"], "source": j["source"], "position": pos, "running": running,
+    return {"id": j["id"], "label": _label(j), "kind": j["kind"], "market": j["market"], "source": j["source"], "position": pos, "running": running,
             "held": held, "since": j["started"] if running else j["queued"]}
 
 def avg_analysis_seconds() -> int:
@@ -81,8 +84,8 @@ def snapshot() -> Dict[str, Any]:
 def _iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S%z")
 
-def submit(kind: str, source: str, ticker: Optional[str] = None, execute: bool = False, ip: Optional[str] = None) -> Dict[str, Any]:
-    """Queue a job. kind: analysis | daily. source: user | admin | schedule. Raises Refused for visitors who hit a limit."""
+def submit(kind: str, source: str, ticker: Optional[str] = None, execute: bool = False, ip: Optional[str] = None, market: str = "us") -> Dict[str, Any]:
+    """Queue a job. kind: analysis | daily (`market` says whose daily cycle). source: user | admin | schedule. Raises Refused for visitors who hit a limit."""
     global _worker
     with _lock:
         if kind == "analysis":
@@ -90,8 +93,8 @@ def submit(kind: str, source: str, ticker: Optional[str] = None, execute: bool =
             if mine:
                 raise Refused(f"{ticker} is already running or queued.", snapshot(), 409)
         else:
-            if any(j["kind"] == "daily" for j in ([_current] if _current else []) + list(_waiting)):
-                raise Refused("A daily cycle is already running or queued.", snapshot(), 409)
+            if any(j["kind"] == "daily" and j["market"] == market for j in ([_current] if _current else []) + list(_waiting)):
+                raise Refused(f"A {markets.get(market).label} daily cycle is already running or queued.", snapshot(), 409)
         if source == "user":
             locked = lock()
             if locked:
@@ -100,7 +103,7 @@ def submit(kind: str, source: str, ticker: Optional[str] = None, execute: bool =
                 raise Refused(f"No: the queue is full ({QUEUE_MAX}/{QUEUE_MAX}). Please wait for an analysis to finish.", snapshot())
             if ip and any(j["ip"] == ip for j in _waiting):
                 raise Refused("You already have an analysis waiting. One at a time per visitor, please.", snapshot())
-        job = {"id": uuid.uuid4().hex[:8], "kind": kind, "source": source, "ticker": ticker, "execute": execute, "ip": ip,
+        job = {"id": uuid.uuid4().hex[:8], "kind": kind, "source": source, "ticker": ticker, "execute": execute, "ip": ip, "market": market,
                "queued": _iso(), "started": None}
         _waiting.append(job)
         if _worker is None or not _worker.is_alive():
@@ -145,7 +148,7 @@ def _run() -> None:
                 _durations.append(time.monotonic() - t0)
             else:
                 from trading.daily_run import run_daily
-                run_daily(execute=job["execute"])
+                run_daily(execute=job["execute"], market=job["market"])
         except Exception as e:  # the failure is already in activity.last / the logs
             logger.warning("job %s (%s) failed: %s", job["id"], _label(job), (str(e).splitlines() or [type(e).__name__])[0])
             if activity.snapshot()["last"] == before and not activity.busy():  # failed before the pipeline reported anything (e.g. unknown ticker)

@@ -83,10 +83,10 @@ class TradingDecision(BaseModel):
 # ---------------------------------------------------------------------------
 class PlanIntent(BaseModel):
     symbol: str = Field(description="Ticker symbol, e.g. AAPL.")
-    action: Literal["buy", "sell", "hold"] = Field(description="buy = open/add, sell = close the position, hold = no change.")
-    target_weight_pct: float = Field(ge=0.0, le=100.0, description="Desired weight of this stock in the portfolio after the action, as % of equity (0 for sell).")
-    stop_loss: Optional[float] = Field(default=None, description="Stop-loss price (below the current price for a buy).")
-    take_profit: Optional[float] = Field(default=None, description="Take-profit price (above the current price for a buy).")
+    action: Literal["buy", "sell", "hold", "short", "cover"] = Field(description="buy = open/add a long, sell = close a long, short = open/add a short, cover = close a short, hold = no change.")
+    target_weight_pct: float = Field(ge=0.0, le=100.0, description="Desired weight of this stock in the portfolio after the action, as % of equity (0 for sell / cover). For a short: how much of equity to be short.")
+    stop_loss: Optional[float] = Field(default=None, description="Stop-loss price: below the current price for a buy, ABOVE it for a short.")
+    take_profit: Optional[float] = Field(default=None, description="Take-profit price: above the current price for a buy, BELOW it for a short.")
     reason: str = Field(description="One or two sentences explaining the decision.")
 
 class PortfolioPlan(BaseModel):

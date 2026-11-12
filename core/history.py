@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from paths import state_dir
+from trading import markets
 
 def _dir() -> Path:
     return Path(os.environ.get("ANALYSES_DIR", state_dir() / "analyses"))
@@ -19,8 +20,8 @@ def save_analysis(state: Dict[str, Any], stages: List[dict], seconds: float, mod
     (_dir() / f"{aid}.json").write_text(json.dumps(rec, indent=2, default=str))
     return aid
 
-def list_analyses(ticker: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
-    """Newest first, summaries only."""
+def list_analyses(ticker: Optional[str] = None, limit: int = 100, market: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Newest first, summaries only. `market` keeps one market's tickers (by their yfinance suffix)."""
     out = []
     for p in sorted(_dir().glob("*.json"), reverse=True):
         if ticker and not p.stem.endswith(f"-{ticker.upper()}"):
@@ -30,6 +31,8 @@ def list_analyses(ticker: Optional[str] = None, limit: int = 100) -> List[Dict[s
         except json.JSONDecodeError:
             continue
         st, d = r["state"], r["state"].get("final_decision") or {}
+        if market and markets.market_of(st["ticker"]) != market:
+            continue
         out.append({"id": r["id"], "time": r["time"], "ticker": st["ticker"], "rating": d.get("rating"), "price": st.get("last_price"),
                     "target": d.get("target_price"), "stop": d.get("stop_loss"), "seconds": r.get("seconds"), "model": r.get("model")})
         if len(out) >= limit:

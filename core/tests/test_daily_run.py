@@ -75,7 +75,7 @@ def test_portfolio_and_trades_api(monkeypatch):
     import main
     import trading.daily_run as dr
 
-    monkeypatch.setattr(dr, "make_broker", lambda: FakeBroker(cash=1000, prices={}))
+    monkeypatch.setattr(dr, "make_broker", lambda *a: FakeBroker(cash=1000, prices={}))
     c = TestClient(main.app)
     p = c.get("/api/portfolio").json()
     assert p["equity"] == 1000 and p["positions"] == [] and p["drawdown_pct"] == 0
